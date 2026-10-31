@@ -65,7 +65,14 @@ jobs:
           ls -l app/src/main/assets/hand_landmarker.task
 
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: |
+          set +e
+          gradle assembleDebug --no-daemon --console=plain > build.log 2>&1
+          code=$?
+          echo "=================== ERRORS (copy from here) ==================="
+          grep -nE "^e: |error:|What went wrong|Could not |FAILED|Execution failed|Unresolved|Duplicate" -A6 build.log | head -70
+          echo "=================== END ==================="
+          exit $code
 
       - name: Name the APK
         run: cp app/build/outputs/apk/debug/app-debug.apk SpatialOS.apk
