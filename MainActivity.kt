@@ -383,6 +383,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var camThread: HandlerThread? = null
     private var camHandler: Handler? = null
     @Volatile private var camJpeg: ByteArray? = null
+    @Volatile private var camSeqN = 0
     @Volatile private var camState = "off"
     @Volatile private var camErr = ""
     @Volatile private var camWanted = false
