@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>SpatialOS</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  #gl { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; background: #000; }
+  #cam { position: fixed; left: 0; top: 0; width: 4px; height: 4px; opacity: 0.01; pointer-events: none; }
+  #divider { position: fixed; left: 50%; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: rgba(255,255,255,.9); pointer-events: none; }
+  #gear { position: fixed; left: 50%; bottom: 10px; width: 36px; height: 36px; margin-left: -18px; pointer-events: none; opacity: .85; }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<video id="cam" autoplay muted playsinline></video>
+<div id="divider"></div>
+<svg id="gear" viewBox="0 0 24 24" fill="#fff"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6a.5.5 0 0 0 .1-.6l-2-3.5a.5.5 0 0 0-.6-.2l-2.5 1a7.3 7.3 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.4h-4a.5.5 0 0 0-.5.4l-.4 2.6a7.3 7.3 0 0 0-1.7 1l-2.5-1a.5.5 0 0 0-.6.2l-2 3.5a.5.5 0 0 0 .1.6L4.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6a.5.5 0 0 0-.1.6l2 3.5c.1.2.4.3.6.2l2.5-1c.5.4 1.1.7 1.7 1l.4 2.6c0 .2.2.4.5.4h4c.3 0 .5-.2.5-.4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.5 1c.2.1.5 0 .6-.2l2-3.5a.5.5 0 0 0-.1-.6L19.4 13zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>
+<script src="three.min.js"></script>
+<script src="core.js"></script>
+<script src="apps.js"></script>
+<script src="mp_hands.js"></script>
+<script src="handtrack.js"></script>
+</body>
+</html>
