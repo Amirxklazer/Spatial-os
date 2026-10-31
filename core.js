@@ -238,7 +238,7 @@
       m.lookAt(0, 0, 0); if (this.tilt) m.rotateX(this.tilt);
       m.updateMatrixWorld(true);
     }
-    scaleNow() { return (this.dist / 2.3) * SOS.settings.winScale * (0.9 + 0.1 * ease(this.anim)); }
+    scaleNow() { return (this.dist / 2.3) * SOS.settings.winScale * (this.sc || 1) * (0.9 + 0.1 * ease(this.anim)); }
     hitTest(px, py) {
       for (let i = this.hits.length - 1; i >= 0; i--) {
         const e = this.hits[i];
@@ -415,7 +415,12 @@
       break;
     }
   }
-  function beginCarry(p, w, mode) { SOS.carry = { win: w, p: p, mode: mode }; w.dirty = true; SOS.tick(900, 0.05, 0.05); }
+  function beginCarry(p, w, mode) {
+    const cr = { win: w, p: p, mode: mode, dy: 0, dp: 0 };
+    if (p.isHand) { cr.dy = angWrap(w.yaw - Math.atan2(-p.dir.x, -p.dir.z)); cr.dp = w.pitch - Math.asin(clamp(p.dir.y, -1, 1)); }
+    SOS.carry = cr; w.dirty = true; SOS.tick(900, 0.05, 0.05);
+  }
+  function angWrap(a) { while (a > Math.PI) a -= Math.PI * 2; while (a < -Math.PI) a += Math.PI * 2; return a; }
   function endCarry() { if (SOS.carry) { SOS.carry.win.dirty = true; SOS.carry = null; SOS.tick(600, 0.06, 0.05); } }
 
   function sendApp(w, type, p, extra) {
@@ -428,7 +433,14 @@
     const w = h.win, el = h.el; SOS.focus(w);
     p.down = { win: w, el: el, px: h.px, py: h.py, sy: w.scrollY, moved: false, t: SOS.t };
     if (el) w.downs.add(el.id); w.dirty = true;
+    const freeSpot = !el || (!el.onClick && !el.kind && !el.onDown);
+    if (p.isHand && SOS.carry && SOS.carry.win === w && SOS.carry.p !== p && SOS.carry.p.pinch && w.id !== 'dock' && w.id !== 'keyboard') {
+      // second hand pinching the same window: resize with both hands
+      const a = SOS.carry.p, ia = a === P.h0 ? 0 : 1, ib = p === P.h0 ? 0 : 1, ha = SOS.hands[ia], hb = SOS.hands[ib];
+      if (ha && hb) { SOS.resize = { win: w, pa: a, pb: p, d0: Math.max(0.05, Math.hypot(ha.ex - hb.ex, ha.ey - hb.ey)), sc0: w.sc || 1 }; SOS.carry = null; p.down.carry = true; SOS.tick(900, 0.05, 0.05); return; }
+    }
     if (el && el.kind === 'grab') { beginCarry(p, w, p.isHand ? 'hold' : 'toggle'); p.down.carry = true; }
+    else if (p.isHand && freeSpot && !w.app.onPointer && !(w.maxScroll > 0) && w.id !== 'dock' && w.id !== 'keyboard' && w.id !== 'toast') { beginCarry(p, w, 'hold'); p.down.carry = true; }
     else if (el && el.onDown) el.onDown(h.px, h.py);
     if (el && el.kind === 'slider') el.onDrag(h.px, h.py);
     if (!el || !el.kind) sendApp(w, 'down', p);
@@ -447,16 +459,21 @@
   }
   function pUp(p) {
     const d = p.down; if (!d) return; p.down = null;
-    if (d.carry) { if (d.win.downs) d.win.downs.delete('__grab'); if (p.isHand) endCarry(); d.win.dirty = true; return; }
+    if (d.carry) {
+      if (d.win.downs) d.win.downs.delete('__grab');
+      const rz = SOS.resize;
+      if (rz && (rz.pa === p || rz.pb === p)) { const other = rz.pa === p ? rz.pb : rz.pa; SOS.resize = null; if (other.pinch && other.down) { beginCarry(other, rz.win, 'hold'); other.down.carry = true; } d.win.dirty = true; return; }
+      if (p.isHand) endCarry(); d.win.dirty = true; return;
+    }
     if (d.el) d.win.downs.delete(d.el.id); d.win.dirty = true;
     const h = p.hit;
     if (!d.moved && d.el && h && h.win === d.win && h.el && h.el.id === d.el.id && d.el.onClick) { d.el.onClick(h.px, h.py, p); SOS.tick(1100, 0.06, 0.06); }
     if (!d.el || !d.el.kind) sendApp(d.win, 'up', p);
   }
   // gaze "click": touch tap / magnet / space
-  SOS.click = function () {
-    const p = P.gaze;
-    if (SOS.carry && SOS.carry.mode === 'toggle') { endCarry(); return; }
+  SOS.click = function () { clickWith(P.gaze); };
+  function clickWith(p) {
+    if (SOS.carry && SOS.carry.mode === 'toggle' && !p.isHand) { endCarry(); return; }
     if (!p.hit) { return; }
     pDown(p);
     const d = p.down; const h = p.hit;
@@ -467,7 +484,7 @@
       else if (d.el.kind === 'slider') { /* value already set on down */ }
     }
     if (SOS.kbFor && (!h.win || (h.win !== SOS.kbFor && h.win.id !== 'keyboard'))) { /* keep keyboard until app hides it */ }
-  };
+  }
   SOS.gazeScroll = function (dyPx) {
     const h = P.gaze.hit; if (!h) return; const w = h.win;
     if (w.maxScroll > 0) { w.scrollY = clamp(w.scrollY + dyPx, 0, w.maxScroll); w.dirty = true; }
@@ -505,6 +522,13 @@
         const nx = hd.ex * 2 - 1, ny = 1 - hd.ey * 2;
         _d.set(nx, ny, 0.5).unproject(headCam).sub(headCam.position).normalize();
         p.origin.set(0, 0, 0); p.dir.copy(_d);
+        // finger tap / poke: click where the fingertip was just before the tap
+        if (hd.tap && hd.tap.t !== p.lastTap && now - hd.tap.t < 400 && !p.pinch) {
+          p.lastTap = hd.tap.t;
+          const sd = p.dir.clone(); _d.set(hd.tap.ex * 2 - 1, 1 - hd.tap.ey * 2, 0.5).unproject(headCam).sub(headCam.position).normalize(); p.dir.copy(_d);
+          castPointer(p); if (p.hit) clickWith(p); p.dir.copy(sd);
+          _d.set(nx, ny, 0.5).unproject(headCam).sub(headCam.position).normalize(); p.dir.copy(_d);
+        }
         // pinch edges
         if (hd.pinch && !p.pinch) { p.pinch = true; castPointer(p); pDown(p); }
         else if (!hd.pinch && p.pinch) { p.pinch = false; pUp(p); }
@@ -535,9 +559,16 @@
       const p = cr.p; if (!p.active) { endCarry(); }
       else {
         const d = p.dir, w = cr.win;
-        w.yaw = Math.atan2(-d.x, -d.z); w.pitch = clamp(Math.asin(clamp(d.y, -1, 1)), -1.2, 1.2); w.place();
+        w.yaw = Math.atan2(-d.x, -d.z) + (cr.dy || 0); w.pitch = clamp(Math.asin(clamp(d.y, -1, 1)) + (cr.dp || 0), -1.2, 1.2); w.place();
         if (SOS.kbFor === w && SOS.wins.keyboard) { const kb = SOS.wins.keyboard; kb.yaw = w.yaw; kb.pitch = clamp(w.pitch - 0.5, -0.9, 0.2); kb.place(); }
       }
+    }
+    // two-hand resize
+    const rz = SOS.resize;
+    if (rz) {
+      const ha = SOS.hands[rz.pa === P.h0 ? 0 : 1], hb = SOS.hands[rz.pb === P.h0 ? 0 : 1];
+      if (!rz.pa.pinch || !rz.pb.pinch || !ha || !hb || !rz.pa.active || !rz.pb.active) { SOS.resize = null; }
+      else { const dd = Math.hypot(ha.ex - hb.ex, ha.ey - hb.ey); rz.win.sc = clamp(rz.sc0 * dd / rz.d0, 0.5, 2.6); rz.win.dirty = true; }
     }
     // dwell (gaze only)
     let prog = 0;

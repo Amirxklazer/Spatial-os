@@ -64,10 +64,23 @@
     apps(c, x, y, r) { c.fillStyle = '#fff'; for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) { c.beginPath(); c.arc(x + (i - 1) * r * 0.36, y + (j - 1) * r * 0.36, r * 0.1, 0, 7); c.fill(); } }
   };
   ICONS.gallery = ICONS.photos;
+  SOS.ICONS = ICONS;
   const LABELS = { settings: 'Settings', gallery: 'Gallery', camera: 'Camera', notes: 'Notes', music: 'Music', sketch: 'Sketch', calc: 'Calculator', clock: 'Clock', env: 'Environments', store: 'App Store', breathe: 'Breathe', compass: 'Compass' };
+  SOS.LABELS = LABELS;
+
+  /* ---------- installed apps (App Store) ---------- */
+  const SYSTEM = ['camera', 'gallery', 'store', 'settings', 'env'];
+  const CATALOG = [['notes', 'Notes', 'Quick text notes'], ['music', 'Music', 'Ambient synth'], ['sketch', 'Sketch', 'Draw in the air'], ['calc', 'Calculator', 'Simple maths'], ['clock', 'Clock', 'Time and world clocks'], ['breathe', 'Breathe', 'Slow down'], ['compass', 'Compass', 'Find your way'], ['timer', 'Timer', 'Countdown with alarm'], ['ttt', 'Tic-Tac-Toe', 'Beat the computer'], ['memory', 'Memory', 'Match the pairs'], ['g2048', '2048', 'Slide and merge']];
+  let INST = null; try { INST = JSON.parse(localStorage.getItem('sos.apps') || 'null'); } catch (e) {}
+  if (!Array.isArray(INST)) INST = ['notes', 'music', 'sketch', 'calc', 'clock', 'breathe', 'compass'];
+  const saveInst = function () { try { localStorage.setItem('sos.apps', JSON.stringify(INST)); } catch (e) {} };
+  SOS.CATALOG = CATALOG;
+  SOS.isInstalled = function (id) { return SYSTEM.indexOf(id) >= 0 || INST.indexOf(id) >= 0; };
+  SOS.installApp = function (id) { if (INST.indexOf(id) < 0) { INST.push(id); saveInst(); } if (SOS.wins.home) SOS.wins.home.dirty = true; };
+  SOS.uninstallApp = function (id) { INST = INST.filter(function (x) { return x !== id; }); saveInst(); if (SOS.wins[id]) SOS.close(id); if (SOS.wins.home) SOS.wins.home.dirty = true; };
+  const homeRows = function () { const list = SYSTEM.concat(INST.filter(function (id) { return SOS.apps[id] && ICONS[id]; })).slice(0, 16), rows = []; for (let i = 0; i < list.length; i += 4) rows.push(list.slice(i, i + 4)); return rows; };
 
   /* ---------- Home ---------- */
-  const HOME_ROWS = [['camera', 'gallery', 'notes', 'music'], ['store', 'settings', 'env', 'sketch'], ['calc', 'clock', 'breathe', 'compass']];
   reg({
     id: 'home', w: 1180, h: 740, chrome: false, glass: false, dist: 2.4,
     draw(ui, win) {
@@ -79,7 +92,7 @@
         if (hv || !t[2]) { c.fillStyle = hv ? 'rgba(255,255,255,.28)' : 'rgba(255,255,255,.16)'; c.beginPath(); c.arc(56, t[1], 24, 0, 7); c.fill(); }
         (t[0] === 'apps' ? ICONS.apps : t[0] === 'env' ? ICONS.target : ICONS.settings)(c, 56, t[1], t[0] === 'settings' ? 15 : 24);
       });
-      HOME_ROWS.forEach(function (row, ri) {
+      homeRows().forEach(function (row, ri) {
         const y = 190 + ri * 156;
         row.forEach(function (id, i) {
           const x = 640 + (i - (row.length - 1) / 2) * sp + (ri === 1 ? sp / 2 : 0), key = 'app_' + id, hv = ui.hover(id) || ui.hover(key), dn = ui.down(key);
@@ -210,7 +223,7 @@
       head('CARDBOARD'), t('Magnet button', 'magnet'), sl('Magnet trigger', 'magnetT', 15, 120, 5, function (v) { return v + ' µT'; }, function () { SOS.pushNative(); }), { type: 'info', label: 'Touch button', value: 'Tap = select · Hold = Home' },
       head('GAZE'), t('Dwell to select', 'dwell'), sl('Dwell time', 'dwellT', 0.6, 3, 0.1, function (v) { return v.toFixed(1) + ' s'; })];
     if (pane === 'sound') return [head('AUDIO'), t('Interface sounds', 'sound'), sl('Volume', 'volume', 0, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }, function () { SOS.tick(1200, 0.08, 0.1); })];
-    return [head('SPATIALOS'), { type: 'info', label: 'Version', value: '1.2' }, { type: 'info', label: 'Frame rate', value: SOS.fps + ' fps' }, { type: 'info', label: 'Head tracking', value: SOS.nativeOK ? 'Gyroscope' : 'Mouse / keys' }, { type: 'info', label: 'Camera', value: SOS.camState === 'on' ? 'Live' : 'Off' },
+    return [head('SPATIALOS'), { type: 'info', label: 'Version', value: '1.3' }, { type: 'info', label: 'Frame rate', value: SOS.fps + ' fps' }, { type: 'info', label: 'Head tracking', value: SOS.nativeOK ? 'Gyroscope' : 'Mouse / keys' }, { type: 'info', label: 'Camera', value: SOS.camState === 'on' ? 'Live' : 'Off' },
       { type: 'info', label: 'Hands', value: !S.hands ? 'Off' : SOS.handsState }, { type: 'info', label: 'Open windows', value: String(Object.keys(SOS.wins).length) }];
   }
   SOS.apps.settings.tick = function (win) { if (win.state.pane === 'about' || win.state.pane === 'input' || win.state.pane === 'passthrough') { win._t = (win._t || 0) + 1; if (win._t % 20 === 0) win.dirty = true; } };
@@ -405,27 +418,28 @@
 
   /* ---------- Store ---------- */
   reg({
-    id: 'store', title: 'Store', w: 1100, h: 680,
-    create(win) { win.state = { page: 0 }; },
+    id: 'store', title: 'Store', w: 1100, h: 700,
+    create(win) { win.state = { dl: {} }; },
+    tick(win) {
+      const st = win.state; let any = false;
+      for (const k in st.dl) { any = true; if (SOS.t - st.dl[k] > 1.4) { delete st.dl[k]; SOS.installApp(k); SOS.toast((LABELS[k] || k) + ' is ready. Find it on Home.', 3); } }
+      if (any) win.dirty = true;
+    },
     draw(ui, win) {
-      const c = ui.c, st = win.state;
-      ui.rect(24, 250, 64, 168, 32, 'rgba(0,0,0,.3)'); ['apps', 'target', 'home'].forEach(function (k, i) { const y = 292 + i * 52; c.fillStyle = i === 0 ? 'rgba(255,255,255,.22)' : 'rgba(0,0,0,0)'; c.beginPath(); c.arc(56, y, 20, 0, 7); c.fill(); ICONS[k](c, 56, y, 20); });
-      ui.text('Apps & Games', 130, 52, { size: 30, weight: 700 });
-      const hx = 120, hy = 96, hw = 940, hh = 340;
-      c.save(); rr(c, hx, hy, hw, hh, 30); c.clip(); const g = c.createLinearGradient(hx, hy, hx + hw, hy + hh); g.addColorStop(0, '#0a63ff'); g.addColorStop(1, '#5ad0ff'); c.fillStyle = g; c.fillRect(hx, hy, hw, hh);
-      c.fillStyle = 'rgba(255,255,255,.08)'; c.beginPath(); c.arc(hx + 760, hy + 170, 250, 0, 7); c.fill(); c.restore();
-      ui.text('GET STARTED', hx + 44, hy + 70, { size: 20, weight: 700, color: 'rgba(255,255,255,.8)' });
-      ui.text('A new space', hx + 44, hy + 130, { size: 52, weight: 700 }); ui.text('for your apps', hx + 44, hy + 190, { size: 52, weight: 700 });
-      ui.text('Everything here runs right on your phone.', hx + 44, hy + 242, { size: 22, color: 'rgba(255,255,255,.82)' });
-      ui.btn('story', hx + 44, hy + 268, 190, 54, { label: 'Open Sketch', size: 22, r: 27, fill: 'rgba(255,255,255,.28)', hoverFill: 'rgba(255,255,255,.45)', onClick: function () { SOS.open('sketch'); } });
-      c.save(); c.shadowColor = 'rgba(0,0,0,.35)'; c.shadowBlur = 30; c.shadowOffsetY = 10; ICONS.store(c, hx + 740, hy + 170, 130); c.restore();
-      ui.text('Dive Into These Must-Have Apps', hx, 482, { size: 24, weight: 700 });
-      [['sketch', 'Sketch', 'Draw in the air'], ['music', 'Music', 'Ambient synth'], ['breathe', 'Breathe', 'Slow down']].forEach(function (a, i) {
-        const x = hx + i * 316, y = 512, id = 'card' + i;
-        ui.hit(id, x, y, 300, 130, { onClick: function () { SOS.open(a[0]); } });
-        ui.rect(x, y, 300, 130, 26, ui.hover(id) ? 'rgba(255,255,255,.22)' : 'rgba(255,255,255,.1)'); ICONS[a[0]](c, x + 66, y + 65, 38);
-        ui.text(a[1], x + 124, y + 52, { size: 28, weight: 700 }); ui.text(a[2], x + 124, y + 88, { size: 21, color: WHITE2 });
+      const c = ui.c, st = win.state, hx = 60, cw = 480, ch = 80, step = 92;
+      ui.text('App Store', hx, 52, { size: 34, weight: 700 });
+      const n = CATALOG.filter(function (a) { return SOS.isInstalled(a[0]); }).length;
+      ui.text(n + ' of ' + CATALOG.length + ' apps installed', win.w - hx, 52, { size: 22, align: 'right', color: WHITE2 });
+      CATALOG.forEach(function (a, i) {
+        const id = a[0], x = hx + (i % 2) * (cw + 20), y = 100 + Math.floor(i / 2) * step, inst = SOS.isInstalled(id), dl = st.dl[id] != null;
+        ui.rect(x, y, cw, ch, 24, 'rgba(255,255,255,.1)');
+        if (ICONS[id]) ICONS[id](c, x + 48, y + ch / 2, 30);
+        ui.text(a[1], x + 100, y + 28, { size: 26, weight: 700 }); ui.text(a[2], x + 100, y + 57, { size: 19, color: WHITE2 });
+        if (dl) { const f = clamp((SOS.t - st.dl[id]) / 1.4, 0, 1); c.save(); c.lineWidth = 6; c.strokeStyle = 'rgba(255,255,255,.25)'; c.beginPath(); c.arc(x + cw - 56, y + ch / 2, 20, 0, 7); c.stroke(); c.strokeStyle = '#0a84ff'; c.beginPath(); c.arc(x + cw - 56, y + ch / 2, 20, -Math.PI / 2, -Math.PI / 2 + f * Math.PI * 2); c.stroke(); c.restore(); }
+        else if (!inst) ui.btn('get_' + id, x + cw - 128, y + 16, 108, 48, { label: 'Get', size: 24, r: 24, fill: '#0a84ff', hoverFill: '#2b95ff', onClick: function () { st.dl[id] = SOS.t; win.dirty = true; } });
+        else { ui.btn('open_' + id, x + cw - 214, y + 16, 92, 48, { label: 'Open', size: 22, r: 24, fill: '#0a84ff', hoverFill: '#2b95ff', onClick: function () { SOS.open(id); } }); ui.btn('rm_' + id, x + cw - 112, y + 16, 92, 48, { label: 'Remove', size: 19, r: 24, onClick: function () { SOS.uninstallApp(id); win.dirty = true; } }); }
       });
+      ui.text('Everything runs on your phone. Nothing is downloaded or tracked.', win.w / 2, 100 + 6 * step + 18, { size: 20, align: 'center', color: WHITE2 });
     }
   });
 

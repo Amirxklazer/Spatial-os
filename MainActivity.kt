@@ -8,6 +8,15 @@ import android.content.pm.PackageManager
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import com.google.mediapipe.framework.image.BitmapImageBuilder
+import com.google.mediapipe.tasks.core.BaseOptions
+import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions
+import com.google.mediapipe.tasks.vision.core.RunningMode
+import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
@@ -243,6 +252,18 @@ class MainActivity : Activity(), SensorEventListener {
         }
 
         @JavascriptInterface
+        fun startHands(): Boolean { handsWanted = true; return startNativeHands() }
+
+        @JavascriptInterface
+        fun stopHands() { handsWanted = false; stopNativeHands() }
+
+        @JavascriptInterface
+        fun handsStatus(): String = handsState
+
+        @JavascriptInterface
+        fun hands(): String = handsOut
+
+        @JavascriptInterface
         fun camStatus(): String = if (camState == "error") "error: $camErr" else camState
 
         @JavascriptInterface
@@ -418,7 +439,7 @@ class MainActivity : Activity(), SensorEventListener {
                         if (now - camLastMs >= 45L) {
                             camLastMs = now
                             val jpg = yuvToJpeg(img)
-                            if (jpg != null) { camJpeg = jpg; camSeqN += 1 }
+                            if (jpg != null) { camJpeg = jpg; camSeqN += 1; feedHands(jpg) }
                         }
                     } catch (e: Exception) {
                     } finally {
@@ -517,6 +538,93 @@ class MainActivity : Activity(), SensorEventListener {
         return out.toByteArray()
     }
 
+    // ---- native hand tracking (MediaPipe Tasks, runs on its own thread, outside the WebView) ----
+    private var landmarker: HandLandmarker? = null
+    private val handExec = Executors.newSingleThreadExecutor()
+    private val handBusy = AtomicBoolean(false)
+    @Volatile private var handsWanted = false
+    @Volatile private var handsState = "off"
+    @Volatile private var handsOut = ""
+    private var handsSeq = 0
+    private var handsLastMs = 0L
+    private var handsTs = 0L
+
+    private fun startNativeHands(): Boolean {
+        if (landmarker != null || handsState == "loading") return true
+        handsState = "loading"
+        handExec.execute {
+            try {
+                val base = BaseOptions.builder().setModelAssetPath("hand_landmarker.task").build()
+                val opts = HandLandmarker.HandLandmarkerOptions.builder()
+                    .setBaseOptions(base)
+                    .setRunningMode(RunningMode.VIDEO)
+                    .setNumHands(2)
+                    .setMinHandDetectionConfidence(0.5f)
+                    .setMinHandPresenceConfidence(0.5f)
+                    .setMinTrackingConfidence(0.5f)
+                    .build()
+                landmarker = HandLandmarker.createFromOptions(this@MainActivity, opts)
+                handsState = if (handsWanted) "on" else "off"
+                if (!handsWanted) { try { landmarker?.close() } catch (e: Exception) { }; landmarker = null }
+            } catch (e: Throwable) {
+                handsState = "error: " + (e.message ?: e.javaClass.simpleName)
+                landmarker = null
+            }
+        }
+        return true
+    }
+
+    private fun stopNativeHands() {
+        handsOut = ""
+        handExec.execute {
+            try { landmarker?.close() } catch (e: Throwable) { }
+            landmarker = null
+            if (!handsWanted) handsState = "off"
+        }
+    }
+
+    private fun feedHands(jpg: ByteArray) {
+        if (!handsWanted || landmarker == null || handsState != "on") return
+        val now = SystemClock.uptimeMillis()
+        if (now - handsLastMs < 33L) return
+        if (!handBusy.compareAndSet(false, true)) return
+        handsLastMs = now
+        val rot = camRotation()
+        handExec.execute {
+            try {
+                val lm = landmarker
+                if (lm != null) {
+                    val bmp = BitmapFactory.decodeByteArray(jpg, 0, jpg.size)
+                    if (bmp != null) {
+                        var ts = SystemClock.uptimeMillis()
+                        if (ts <= handsTs) ts = handsTs + 1
+                        handsTs = ts
+                        val po = ImageProcessingOptions.builder().setRotationDegrees(rot).build()
+                        val res = lm.detectForVideo(BitmapImageBuilder(bmp).build(), po, ts)
+                        val sb = StringBuilder()
+                        sb.append(++handsSeq).append(';')
+                        var first = true
+                        for (hand in res.landmarks()) {
+                            if (!first) sb.append('|')
+                            first = false
+                            var i = 0
+                            for (p in hand) {
+                                if (i++ > 0) sb.append(',')
+                                sb.append(String.format(java.util.Locale.US, "%.4f,%.4f", p.x(), p.y()))
+                            }
+                        }
+                        handsOut = sb.toString()
+                        bmp.recycle()
+                    }
+                }
+            } catch (e: Throwable) {
+                handsState = "error: " + (e.message ?: e.javaClass.simpleName)
+            } finally {
+                handBusy.set(false)
+            }
+        }
+    }
+
     // ---- sensors ----
     @Suppress("DEPRECATION")
     private fun displayRotation(): Int = windowManager.defaultDisplay.rotation
@@ -590,6 +698,8 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     override fun onDestroy() {
+        handsWanted = false
+        stopNativeHands()
         stopNativeCamera()
         web.destroy()
         super.onDestroy()
