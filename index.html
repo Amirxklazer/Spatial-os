@@ -5,11 +5,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>SpatialOS</title>
 <style>
-  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   #gl { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; background: #000; }
   #cam { position: fixed; left: 0; top: 0; width: 4px; height: 4px; opacity: 0.01; pointer-events: none; }
   #divider { position: fixed; left: 50%; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: rgba(255,255,255,.9); pointer-events: none; }
   #gear { position: fixed; left: 50%; bottom: 10px; width: 36px; height: 36px; margin-left: -18px; pointer-events: none; opacity: .85; }
+  /* loading screen: identical in both halves so it reads in the viewer */
+  #loader { position: fixed; inset: 0; z-index: 10; background: radial-gradient(ellipse at 50% 40%, #0f1630 0%, #05070d 70%); color: #fff; display: flex; transition: opacity .45s; }
+  #loader.gone { opacity: 0; pointer-events: none; }
+  #loader .eye { width: 50%; height: 100%; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  #loader .box { width: 70%; text-align: center; }
+  #loader svg { width: 11vh; height: 11vh; }
+  #loader .title { font-size: 7vh; font-weight: 700; letter-spacing: .02em; margin-top: 1.5vh; }
+  #loader .ver { font-size: 2.8vh; opacity: .6; margin-top: .4vh; }
+  #loader .status { font-size: 3.2vh; opacity: .85; margin-top: 4vh; min-height: 4vh; }
+  #loader .bar { height: 1.1vh; background: rgba(255,255,255,.14); border-radius: 1vh; margin: 2vh auto 0; width: 80%; overflow: hidden; }
+  #loader .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #4fc3ff, #0a84ff); border-radius: 1vh; transition: width .25s; }
+  #loader .big { font-size: 5.6vh; font-weight: 700; margin-top: 3.5vh; line-height: 1.15; display: none; }
+  #loader .sub { font-size: 2.8vh; opacity: .7; margin-top: 1.6vh; min-height: 3vh; }
+  #loader .warn { font-size: 2.5vh; color: #ffd60a; margin-top: 2vh; min-height: 2.5vh; line-height: 1.25; }
+  #ldiv { position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: rgba(255,255,255,.5); }
 </style>
 </head>
 <body>
@@ -17,10 +32,79 @@
 <video id="cam" autoplay muted playsinline></video>
 <div id="divider"></div>
 <svg id="gear" viewBox="0 0 24 24" fill="#fff"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6a.5.5 0 0 0 .1-.6l-2-3.5a.5.5 0 0 0-.6-.2l-2.5 1a7.3 7.3 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.4h-4a.5.5 0 0 0-.5.4l-.4 2.6a7.3 7.3 0 0 0-1.7 1l-2.5-1a.5.5 0 0 0-.6.2l-2 3.5a.5.5 0 0 0 .1.6L4.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6a.5.5 0 0 0-.1.6l2 3.5c.1.2.4.3.6.2l2.5-1c.5.4 1.1.7 1.7 1l.4 2.6c0 .2.2.4.5.4h4c.3 0 .5-.2.5-.4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.5 1c.2.1.5 0 .6-.2l2-3.5a.5.5 0 0 0-.1-.6L19.4 13zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>
-<script src="three.min.js"></script>
-<script src="core.js"></script>
-<script src="apps.js"></script>
-<script src="mp_hands.js"></script>
-<script src="handtrack.js"></script>
+
+<div id="loader">
+  <div class="eye"></div><div class="eye"></div><div id="ldiv"></div>
+</div>
+
+<script>
+(function () {
+  var box = '<div class="box"><svg viewBox="0 0 64 64"><rect x="4" y="18" width="56" height="30" rx="12" fill="#fff"/><circle cx="21" cy="33" r="9" fill="#0a63ff"/><circle cx="43" cy="33" r="9" fill="#0a63ff"/><rect x="29" y="18" width="6" height="16" fill="#0a63ff"/></svg>' +
+    '<div class="title">SpatialOS</div><div class="ver">version 1.1</div><div class="status">Starting…</div><div class="bar"><i></i></div>' +
+    '<div class="big">Put your phone<br>in your viewer</div><div class="sub"></div><div class="warn"></div></div>';
+  var eyes = document.querySelectorAll('#loader .eye'); eyes[0].innerHTML = box; eyes[1].innerHTML = box;
+  function all(sel, fn) { document.querySelectorAll('#loader ' + sel).forEach(fn); }
+  function status(t, p) { all('.status', function (e) { e.textContent = t; }); if (p != null) all('.bar i', function (e) { e.style.width = Math.round(p * 100) + '%'; }); }
+  function sub(t) { all('.sub', function (e) { e.textContent = t; }); }
+  function warn(t) { all('.warn', function (e) { e.textContent = t; }); }
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function loadScript(src) { return new Promise(function (res, rej) { var s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = function () { rej(new Error('Could not load ' + src)); }; document.body.appendChild(s); }); }
+  function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
+  // crash detection: 'boot' is cleared once the app has been running fine for a few seconds
+  var crashed = lsGet('sos.run') === 'boot', handsCrashed = lsGet('sos.handsrun') === '1';
+  lsSet('sos.run', 'boot');
+  function markOk() { lsSet('sos.run', 'ok'); }
+  window.addEventListener('pagehide', markOk);
+  document.addEventListener('visibilitychange', function () { if (document.hidden) markOk(); });
+
+  var started = false;
+  function fail(e) { status('Something went wrong', 1); all('.bar i', function (x) { x.style.background = '#ff453a'; }); warn(String(e && e.message || e)); sub('Tap the screen to try again'); document.getElementById('loader').onclick = function () { location.reload(); }; }
+  window.addEventListener('error', function (ev) { if (!started) fail(ev.message || 'Error'); });
+
+  (async function () {
+    try {
+      status('Loading 3D engine…', 0.08); await sleep(60);
+      await loadScript('three.min.js');
+      status('Loading interface…', 0.25); await sleep(40);
+      await loadScript('core.js'); await loadScript('apps.js'); await loadScript('apps2.js'); await loadScript('handtrack.js');
+      var SOS = window.SOS, S = SOS.settings;
+      if (crashed || handsCrashed) {
+        S.camera = false; if (crashed) S.resScale = Math.min(S.resScale, 0.65);
+        if (handsCrashed) { S.hands = false; lsSet('sos.handsrun', '0'); }
+        SOS.save();
+        warn(handsCrashed ? 'Hand tracking crashed the app last time, so it is switched off. Camera is off too.' : 'The app closed unexpectedly last time, so the camera is switched off. You can turn it back on in Settings.');
+      }
+      status('Preparing your space…', 0.5); await sleep(80);
+      SOS.prepare();
+      if (S.camera) {
+        status('Starting camera…', 0.68);
+        await Promise.race([SOS.enableCamera(), sleep(15000)]);
+        if (S.hands && SOS.camState === 'on') { status('Loading hand tracking…', 0.82); await sleep(250); await Promise.race([SOS.startHands(), sleep(25000)]); }
+      }
+      status('Ready', 1);
+      all('.status', function (e) { e.style.display = 'none'; }); all('.bar', function (e) { e.style.display = 'none'; });
+      all('.big', function (e) { e.style.display = 'block'; });
+
+      var left = 10, begun = false;
+      function begin() {
+        if (begun) return; begun = true; started = true; clearInterval(timer); clearInterval(poll);
+        SOS.audio();
+        SOS.start();
+        document.getElementById('loader').classList.add('gone');
+        setTimeout(function () { document.getElementById('loader').style.display = 'none'; }, 600);
+        setTimeout(markOk, 6000);
+      }
+      function tickSub() { sub('Starting in ' + left + ' · tap the screen to start now'); }
+      tickSub();
+      var timer = setInterval(function () { left--; if (left <= 0) begin(); else tickSub(); }, 1000);
+      var poll = setInterval(function () { try { if (window.NativeBridge && NativeBridge.takeClicks() > 0) begin(); } catch (e) {} }, 100);
+      document.getElementById('loader').addEventListener('touchend', function (e) { e.preventDefault(); begin(); }, { passive: false });
+      document.getElementById('loader').addEventListener('click', begin);
+    } catch (e) { fail(e); }
+  })();
+})();
+</script>
 </body>
 </html>

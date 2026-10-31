@@ -47,6 +47,10 @@
       disc(c, x, y, r, '#4fc3ff', '#0a63ff'); c.fillStyle = '#fff'; rr(c, x - r * 0.42, y - r * 0.18, r * 0.84, r * 0.62, r * 0.12); c.fill();
       c.strokeStyle = '#fff'; c.lineWidth = r * 0.1; c.lineCap = 'round'; c.beginPath(); c.arc(x, y - r * 0.18, r * 0.24, Math.PI, 0); c.stroke();
     },
+    camera(c, x, y, r) {
+      disc(c, x, y, r, '#4b4d55', '#1d1e22'); c.fillStyle = '#fff'; rr(c, x - r * 0.56, y - r * 0.3, r * 1.12, r * 0.74, r * 0.14); c.fill(); c.beginPath(); c.moveTo(x - r * 0.24, y - r * 0.3); c.lineTo(x - r * 0.14, y - r * 0.46); c.lineTo(x + r * 0.14, y - r * 0.46); c.lineTo(x + r * 0.24, y - r * 0.3); c.fill();
+      c.fillStyle = '#1d1e22'; c.beginPath(); c.arc(x, y + r * 0.07, r * 0.26, 0, 7); c.fill(); c.fillStyle = '#4fc3ff'; c.beginPath(); c.arc(x, y + r * 0.07, r * 0.15, 0, 7); c.fill();
+    },
     breathe(c, x, y, r) {
       disc(c, x, y, r, '#5eead4', '#0f9aa6'); c.fillStyle = 'rgba(255,255,255,.35)'; for (let i = 0; i < 3; i++) { c.beginPath(); c.arc(x, y, r * (0.2 + i * 0.2), 0, 7); c.fill(); }
     },
@@ -59,10 +63,11 @@
     hand(c, x, y, r) { c.strokeStyle = '#fff'; c.lineWidth = r * 0.1; c.lineCap = 'round'; c.lineJoin = 'round'; c.beginPath(); c.moveTo(x - r * 0.3, y + r * 0.5); c.lineTo(x - r * 0.4, y - r * 0.05); c.moveTo(x - r * 0.15, y - r * 0.1); c.lineTo(x - r * 0.15, y - r * 0.5); c.moveTo(x + r * 0.02, y - r * 0.1); c.lineTo(x + r * 0.02, y - r * 0.58); c.moveTo(x + r * 0.2, y - r * 0.05); c.lineTo(x + r * 0.2, y - r * 0.45); c.moveTo(x - r * 0.3, y + r * 0.5); c.lineTo(x + r * 0.32, y + r * 0.5); c.lineTo(x + r * 0.4, y + r * 0.05); c.lineTo(x + r * 0.2, y - r * 0.05); c.stroke(); },
     apps(c, x, y, r) { c.fillStyle = '#fff'; for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) { c.beginPath(); c.arc(x + (i - 1) * r * 0.36, y + (j - 1) * r * 0.36, r * 0.1, 0, 7); c.fill(); } }
   };
-  const LABELS = { settings: 'Settings', photos: 'Photos', notes: 'Notes', music: 'Music', sketch: 'Sketch', calc: 'Calculator', clock: 'Clock', env: 'Environments', store: 'App Store', breathe: 'Breathe', compass: 'Compass' };
+  ICONS.gallery = ICONS.photos;
+  const LABELS = { settings: 'Settings', gallery: 'Gallery', camera: 'Camera', notes: 'Notes', music: 'Music', sketch: 'Sketch', calc: 'Calculator', clock: 'Clock', env: 'Environments', store: 'App Store', breathe: 'Breathe', compass: 'Compass' };
 
   /* ---------- Home ---------- */
-  const HOME_ROWS = [['photos', 'notes', 'music', 'sketch'], ['store', 'settings', 'env'], ['calc', 'clock', 'breathe', 'compass']];
+  const HOME_ROWS = [['camera', 'gallery', 'notes', 'music'], ['store', 'settings', 'env', 'sketch'], ['calc', 'clock', 'breathe', 'compass']];
   reg({
     id: 'home', w: 1180, h: 740, chrome: false, glass: false, dist: 2.4,
     draw(ui, win) {
@@ -70,15 +75,15 @@
       // left tab bar
       ui.rect(18, 270, 76, 200, 38, 'rgba(40,40,46,.62)', 'rgba(255,255,255,.14)');
       [['apps', 308, null], ['env', 370, 'env'], ['settings', 432, 'settings']].forEach(function (t) {
-        const id = 'tab_' + t[0], hv = ui.hover(id); ui.hit(id, 28, t[1] - 28, 56, 56, { onClick: t[2] ? function () { SOS.open(t[2]); } : null });
+        const id = 'tab_' + t[0], hv = ui.hover(id); ui.hit(id, 28, t[1] - 28, 56, 56, { onClick: t[2] ? function () { SOS.open(t[2]); SOS.close('home'); } : null });
         if (hv || !t[2]) { c.fillStyle = hv ? 'rgba(255,255,255,.28)' : 'rgba(255,255,255,.16)'; c.beginPath(); c.arc(56, t[1], 24, 0, 7); c.fill(); }
         (t[0] === 'apps' ? ICONS.apps : t[0] === 'env' ? ICONS.target : ICONS.settings)(c, 56, t[1], t[0] === 'settings' ? 15 : 24);
       });
       HOME_ROWS.forEach(function (row, ri) {
         const y = 190 + ri * 156;
         row.forEach(function (id, i) {
-          const x = 640 + (i - (row.length - 1) / 2) * sp, key = 'app_' + id, hv = ui.hover(id) || ui.hover(key), dn = ui.down(key);
-          ui.hit(key, x - 78, y - 78, 156, 156, { onClick: function () { SOS.open(id); } });
+          const x = 640 + (i - (row.length - 1) / 2) * sp + (ri === 1 ? sp / 2 : 0), key = 'app_' + id, hv = ui.hover(id) || ui.hover(key), dn = ui.down(key);
+          ui.hit(key, x - 78, y - 78, 156, 156, { onClick: function () { SOS.open(id); SOS.close('home'); } });
           const hv2 = ui.hover(key);
           c.save(); c.shadowColor = 'rgba(0,0,0,.45)'; c.shadowBlur = hv2 ? 34 : 20; c.shadowOffsetY = 8;
           const r = 72 * (hv2 ? 1.1 : 1) * (dn ? 0.95 : 1); ICONS[id](c, x, y, r); c.restore();
@@ -90,7 +95,7 @@
   });
 
   /* ---------- Dock ---------- */
-  const ENVS = ['passthrough', 'sunset', 'night', 'studio'], ENV_NAMES = { passthrough: 'Passthrough', sunset: 'Sunset Dunes', night: 'Midnight', studio: 'Studio' };
+  const ENVS = ['night', 'sunset', 'studio', 'passthrough'], ENV_NAMES = { passthrough: 'Camera', sunset: 'Sunset Dunes', night: 'Moonlight', studio: 'Studio' };
   reg({
     id: 'dock', w: 600, h: 130, chrome: false, radius: 65, dist: 2.0,
     draw(ui, win) {
@@ -98,7 +103,7 @@
         ['home', 'Home', function () { SOS.toggleHome(); }, false],
         ['target', 'Recenter', function () { SOS.recenter(); const hp = { yaw: 0, pitch: 0 }; for (const k in SOS.wins) { const w = SOS.wins[k]; if (k === 'dock') continue; w.yaw = 0; w.pitch = k === 'keyboard' ? -0.5 : 0.02; w.place(); } }, false],
         ['env', 'Space', function () { SOS.setEnv(ENVS[(ENVS.indexOf(SOS.env) + 1) % ENVS.length]); win.dirty = true; }, false],
-        ['hand', 'Hands', function () { set('hands', !S.hands); }, S.hands],
+        ['hand', 'Hands', function () { if (SOS.camState !== 'on') { SOS.toast('Turn the camera on first: Settings > Passthrough.', 4); return; } set('hands', !S.hands); if (S.hands) SOS.startHands(); else SOS.stopHands(); win.dirty = true; }, S.hands && SOS.camState === 'on'],
         ['settings', 'Settings', function () { SOS.open('settings'); }, false]
       ];
       items.forEach(function (it, i) {
@@ -193,16 +198,22 @@
       head('SYSTEM'), { type: 'button', label: 'Restore default settings', onClick: function () { SOS.resetSettings(); SOS.setEnv('passthrough'); SOS.setResScale(); win.dirty = true; } }, { type: 'button', label: 'Shut Down', color: '#ff453a', onClick: function () { SOS.quit(); } }];
     if (pane === 'display') return [head('LENSES'), sl('Eye distance', 'ipd', 54, 74, 1, function (v) { return v + ' mm'; }), sl('Field of view', 'fov', 60, 100, 1, function (v) { return v + '°'; }), t('Lens distortion correction', 'distortion'), sl('Lens strength', 'lens', 0, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }),
       head('DISPLAY'), sl('Render quality', 'resScale', 0.5, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }, function () { SOS.setResScale(); }), t('Centre divider', 'divider'), sl('Window size', 'winScale', 0.7, 1.4, 0.05, function (v) { return Math.round(v * 100) + '%'; })];
-    if (pane === 'passthrough') return [head('BACKGROUND'), { type: 'choice', label: 'Space', value: SOS.env, opts: ENVS.map(function (e) { return [e, e === 'passthrough' ? 'Camera' : ENV_NAMES[e].split(' ')[0]]; }), set: function (e) { SOS.setEnv(e); }, h: 130 },
-      sl('Camera brightness', 'bright', 0.5, 1.6, 0.05, function (v) { return Math.round(v * 100) + '%'; }), { type: 'info', label: 'Camera', value: SOS.videoReady ? 'Live' : 'Not available' }];
-    if (pane === 'input') return [head('HANDS'), t('Hand tracking', 'hands'), t('Show hand cursor', 'handCursor'), { type: 'info', label: 'Hand status', value: !S.hands ? 'Off' : SOS.handsState || 'Starting…' },
+    if (pane === 'passthrough') {
+      const cs = SOS.camState, csTxt = cs === 'on' ? 'Live' : cs === 'asking' ? 'Asking for permission…' : cs === 'blocked' ? 'Blocked' : cs === 'error' ? 'Error' : 'Off';
+      const rows = [head('SPACE'), { type: 'choice', label: 'Background', value: SOS.env, opts: ENVS.map(function (e) { return [e, e === 'passthrough' ? 'Camera' : ENV_NAMES[e].split(' ')[0]]; }), set: function (e) { SOS.setEnv(e); }, h: 130 },
+        head('CAMERA'), { type: 'toggle', label: 'Use camera', value: cs === 'on', set: function () { if (SOS.camState === 'on') SOS.disableCamera(); else SOS.enableCamera(); win.dirty = true; } },
+        { type: 'info', label: 'Camera status', value: csTxt }, sl('Camera brightness', 'bright', 0.5, 1.6, 0.05, function (v) { return Math.round(v * 100) + '%'; })];
+      if (cs === 'blocked' || cs === 'error') { rows.push({ type: 'button', label: 'Open Android app settings', note: 'Permissions > Camera > Allow', onClick: function () { try { window.NativeBridge.openAppSettings(); } catch (e) {} } }); }
+      return rows;
+    }
+    if (pane === 'input') return [head('HANDS'), t('Hand tracking (needs camera)', 'hands', function () { if (S.hands && SOS.camState === 'on') SOS.startHands(); else SOS.stopHands(); }), t('Open palm opens Home', 'palm'), t('Show hand cursor', 'handCursor'), { type: 'info', label: 'Hand status', value: !S.hands ? 'Off' : SOS.handsState },
       head('CARDBOARD'), t('Magnet button', 'magnet'), sl('Magnet trigger', 'magnetT', 15, 120, 5, function (v) { return v + ' µT'; }, function () { SOS.pushNative(); }), { type: 'info', label: 'Touch button', value: 'Tap = select · Hold = Home' },
       head('GAZE'), t('Dwell to select', 'dwell'), sl('Dwell time', 'dwellT', 0.6, 3, 0.1, function (v) { return v.toFixed(1) + ' s'; })];
     if (pane === 'sound') return [head('AUDIO'), t('Interface sounds', 'sound'), sl('Volume', 'volume', 0, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }, function () { SOS.tick(1200, 0.08, 0.1); })];
-    return [head('SPATIALOS'), { type: 'info', label: 'Version', value: '1.0' }, { type: 'info', label: 'Frame rate', value: SOS.fps + ' fps' }, { type: 'info', label: 'Head tracking', value: SOS.nativeOK ? 'Gyroscope' : 'Mouse / keys' }, { type: 'info', label: 'Camera', value: SOS.videoReady ? 'Live' : 'Not available' },
-      { type: 'info', label: 'Hands', value: !S.hands ? 'Off' : SOS.handsState || 'Starting…' }, { type: 'info', label: 'Open windows', value: String(Object.keys(SOS.wins).length) }];
+    return [head('SPATIALOS'), { type: 'info', label: 'Version', value: '1.1' }, { type: 'info', label: 'Frame rate', value: SOS.fps + ' fps' }, { type: 'info', label: 'Head tracking', value: SOS.nativeOK ? 'Gyroscope' : 'Mouse / keys' }, { type: 'info', label: 'Camera', value: SOS.camState === 'on' ? 'Live' : 'Off' },
+      { type: 'info', label: 'Hands', value: !S.hands ? 'Off' : SOS.handsState }, { type: 'info', label: 'Open windows', value: String(Object.keys(SOS.wins).length) }];
   }
-  SOS.apps.settings.tick = function (win) { if (win.state.pane === 'about' || win.state.pane === 'input') { win._t = (win._t || 0) + 1; if (win._t % 20 === 0) win.dirty = true; } };
+  SOS.apps.settings.tick = function (win) { if (win.state.pane === 'about' || win.state.pane === 'input' || win.state.pane === 'passthrough') { win._t = (win._t || 0) + 1; if (win._t % 20 === 0) win.dirty = true; } };
 
   /* ---------- Notes ---------- */
   function wrapText(c, text, maxW) {
@@ -237,37 +248,8 @@
     }
   });
 
-  /* ---------- Photos ---------- */
+  /* ---------- shared helper ---------- */
   function envThumb(kind, w, h) { const cv = document.createElement('canvas'); cv.width = 2048; cv.height = 1024; SOS.drawEnv(kind, cv); const o = document.createElement('canvas'); o.width = w; o.height = h; const oc = o.getContext('2d'); oc.drawImage(cv, 2048 * 0.75 - 560, 1024 * 0.5 - 320, 1120, 630, 0, 0, w, h); return o; }
-  reg({
-    id: 'photos', title: 'Photos', w: 1100, h: 660,
-    create(win) {
-      win.state = { sel: 0, imgs: [] };
-      try { win.state.imgs = [envThumb('sunset', 640, 360), envThumb('night', 640, 360), envThumb('studio', 640, 360)]; } catch (e) {}
-    },
-    draw(ui, win) {
-      const st = win.state, c = ui.c;
-      ui.text('Photos', 48, 52, { size: 34, weight: 700 });
-      ui.btn('shot', win.w - 360, 24, 190, 56, { label: '● Capture', size: 24, r: 28, fill: '#ff453a', hoverFill: '#ff6a60', onClick: function () {
-        const v = SOS.video; if (!v || !SOS.videoReady) return;
-        const o = document.createElement('canvas'); o.width = 640; o.height = 360; const oc = o.getContext('2d'); const va = v.videoWidth / v.videoHeight, ta = 640 / 360; let sw = v.videoWidth, sh = v.videoHeight, sx = 0, sy = 0; if (va > ta) { sw = sh * ta; sx = (v.videoWidth - sw) / 2; } else { sh = sw / ta; sy = (v.videoHeight - sh) / 2; }
-        oc.drawImage(v, sx, sy, sw, sh, 0, 0, 640, 360); st.imgs.push(o); st.sel = st.imgs.length - 1; if (st.imgs.length > 14) { st.imgs.shift(); st.sel--; } SOS.tick(1800, 0.12, 0.1); win.dirty = true;
-      } });
-      ui.btn('del', win.w - 160, 24, 112, 56, { label: 'Delete', size: 22, r: 28, onClick: function () { if (st.imgs.length) { st.imgs.splice(st.sel, 1); st.sel = clamp(st.sel, 0, Math.max(0, st.imgs.length - 1)); win.dirty = true; } } });
-      const px = 36, py = 110, pw = 700, ph = 394;
-      ui.rect(px, py, pw, ph, 26, 'rgba(0,0,0,.35)');
-      const img = st.imgs[st.sel];
-      if (img) { c.save(); rr(c, px, py, pw, ph, 26); c.clip(); c.drawImage(img, px, py, pw, ph); c.restore(); } else ui.text('No photos yet', px + pw / 2, py + ph / 2, { size: 30, align: 'center', color: WHITE2 });
-      ui.text(SOS.videoReady ? 'Capture saves what the camera sees.' : 'Camera is not available, showing built-in scenes.', px, py + ph + 40, { size: 22, color: WHITE2 });
-      const gx = 770, gy = 110; ui.text(st.imgs.length + ' items', gx, gy - 4, { size: 20, color: WHITE2, weight: 600 });
-      st.imgs.forEach(function (im, i) {
-        const col = i % 2, row = Math.floor(i / 2), x = gx + col * 160, y = gy + 24 + row * 98, id = 'th' + i;
-        ui.hit(id, x, y, 150, 90, { onClick: function () { st.sel = i; win.dirty = true; } });
-        c.save(); rr(c, x, y, 150, 86, 14); c.clip(); c.drawImage(im, x, y, 150, 86); c.restore();
-        if (i === st.sel) ui.rect(x, y, 150, 86, 14, null, '#0a84ff', 4); else if (ui.hover(id)) ui.rect(x, y, 150, 86, 14, 'rgba(255,255,255,.18)');
-      });
-    }
-  });
 
   /* ---------- Music ---------- */
   const TRACKS = [{ n: 'Aurora', a: 'Ambient', ch: [[57, 60, 64, 71], [53, 57, 60, 67], [55, 59, 62, 69], [52, 56, 59, 66]] }, { n: 'Dunes', a: 'Warm pads', ch: [[50, 57, 62, 65], [46, 53, 58, 62], [48, 55, 60, 64], [45, 52, 57, 61]] }, { n: 'Tide', a: 'Slow waves', ch: [[55, 59, 62, 66], [52, 55, 59, 64], [50, 54, 57, 62], [54, 57, 61, 66]] }, { n: 'Orbit', a: 'Night drift', ch: [[48, 55, 60, 63], [44, 51, 56, 60], [46, 53, 58, 62], [43, 50, 55, 59]] }];

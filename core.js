@@ -5,7 +5,7 @@
   const SOS = (window.SOS = { apps: {}, wins: {}, hands: [], env: 'passthrough', videoReady: false, video: null, t: 0, fps: 60, zc: 1, vidAspect: 16 / 9, yawRaw: 0, pitchRaw: 0 });
 
   /* ---------- settings ---------- */
-  const DEF = { ipd: 63, fov: 82, distortion: true, lens: 0.5, resScale: 0.9, divider: true, winScale: 1, bright: 1, hands: true, magnet: true, magnetT: 45, dwell: false, dwellT: 1.4, handCursor: false, volume: 0.7, sound: true, env: 'passthrough' };
+  const DEF = { ipd: 63, fov: 82, distortion: true, lens: 0.5, resScale: 0.8, divider: true, winScale: 1, bright: 1, hands: true, palm: true, magnet: true, magnetT: 45, dwell: false, dwellT: 1.4, handCursor: false, volume: 0.7, sound: true, env: 'night', camera: false };
   SOS.settings = Object.assign({}, DEF);
   try { Object.assign(SOS.settings, JSON.parse(localStorage.getItem('sos.settings') || '{}')); } catch (e) {}
   SOS.save = function () { try { localStorage.setItem('sos.settings', JSON.stringify(SOS.settings)); } catch (e) {} };
@@ -168,6 +168,7 @@
   const envMesh = new T.Mesh(new T.SphereGeometry(60, 48, 32), new T.MeshBasicMaterial({ map: envTex, side: T.BackSide, depthWrite: false, fog: false }));
   envMesh.scale.x = -1; envMesh.renderOrder = -100; envMesh.visible = false; scene.add(envMesh);
   SOS.setEnv = function (kind, temp) {
+    if (kind === 'passthrough' && SOS.camState !== 'on') { SOS.enableCamera(); return; }
     SOS.env = kind; if (!temp) { SOS.settings.env = kind; SOS.save(); }
     if (kind === 'passthrough') { envMesh.visible = false; return; }
     SOS.drawEnv(kind, envCanvas); envTex.needsUpdate = true; envMesh.visible = true;
@@ -349,15 +350,18 @@
     const app = SOS.apps[id]; if (!app) return null;
     let w = SOS.wins[id];
     const hp = SOS.headYawPitch();
+    const angDist = function (a, b) { return Math.abs(((a - b + Math.PI * 3) % (Math.PI * 2)) - Math.PI); };
     if (w && w.closing) { w.closing = false; w.dirty = true; }
-    if (w) { SOS.focus(w); if (o.bring !== false && app.id !== 'dock' && app.id !== 'keyboard') { w.yaw = hp.yaw; w.pitch = clamp(hp.pitch, -0.25, 0.25); w.place(); } return w; }
-    let yaw = hp.yaw, pitch = clamp(hp.pitch, -0.25, 0.25);
+    if (w) {
+      SOS.focus(w);
+      // windows stay where they are; only fetch one that is far out of view (or when asked to)
+      if ((o.bring === true || (o.bring !== false && angDist(w.yaw, hp.yaw) > 0.9)) && id !== 'dock' && id !== 'keyboard') { w.yaw = hp.yaw; w.pitch = clamp(hp.pitch, -0.25, 0.25); w.place(); }
+      return w;
+    }
+    let yaw = hp.yaw, pitch = clamp(hp.pitch, -0.2, 0.2);
+    if (id === 'home') yaw = hp.yaw + 0.3; // Home sits off to the left, not dead centre
     if (app.pitch != null) pitch = app.pitch;
     if (app.fixedYaw != null) yaw = app.fixedYaw;
-    // nudge so the new window does not sit exactly on another one
-    if (!o.exact) {
-      for (const k in SOS.wins) { const q = SOS.wins[k]; if (q.closing || q.id === 'dock' || q.id === 'keyboard' || q.id === id) continue; if (Math.abs(q.yaw - yaw) < 0.35 && Math.abs(q.pitch - pitch) < 0.3) { yaw += 0.0; q.dist = Math.max(q.dist, 2.5); q.place(); } }
-    }
     w = new Win(app, { yaw: o.yaw != null ? o.yaw : yaw, pitch: o.pitch != null ? o.pitch : pitch, dist: o.dist || app.dist || 2.3, tilt: app.tilt || 0 });
     SOS.wins[id] = w; SOS.focus(w);
     if (app.onOpen) app.onOpen(w);
@@ -382,6 +386,7 @@
       if (dy < 0.5) { SOS.close('home'); return; }
     }
     SOS.open('home', { bring: true });
+    const hh = SOS.wins.home; if (hh) { const q = SOS.headYawPitch(); hh.yaw = q.yaw + 0.3; hh.pitch = clamp(q.pitch, -0.2, 0.2); hh.place(); }
   };
   SOS.showKeyboard = function (w) {
     SOS.kbFor = w; const kb = SOS.open('keyboard', { exact: true, yaw: w.yaw, pitch: clamp(w.pitch - 0.46, -0.9, 0.2), dist: Math.max(1.6, w.dist - 0.4) });
@@ -399,7 +404,7 @@
 
   function castPointer(p) {
     ray.set(p.origin, p.dir);
-    const list = winMeshes.filter(function (m) { const w = m.userData.win; return !w.closing && w.anim > 0.35 && m.visible; });
+    const list = winMeshes.filter(function (m) { const w = m.userData.win; return !w.closing && w.anim > 0.35 && m.visible && !w.app.ghost; });
     const hits = ray.intersectObjects(list, false);
     p.hit = null;
     // pick nearest hit where the pixel is non-transparent-ish (inside window rect) -> take first hit; prefer highest z among near-equal
@@ -582,7 +587,7 @@
       const x0 = e * (W >> 1), w = W >> 1;
       renderer.setViewport(x0, 0, w, H); renderer.setScissor(x0, 0, w, H);
       renderer.clear(true, true, true);
-      renderer.render(bgScene, bgCam);
+      if (!envMesh.visible) renderer.render(bgScene, bgCam);
       renderer.clearDepth();
       renderer.render(scene, eyeCams[e]);
     }
@@ -638,15 +643,53 @@
   }, 30);
 
   /* ---------- boot ---------- */
-  SOS.boot = function () {
+  /* ---------- camera (opt-in) ---------- */
+  SOS.camState = 'off'; // off | asking | on | blocked | error
+  SOS.stream = null;
+  SOS.onCamPerm = function (ok) { if (SOS._camRes) { const r = SOS._camRes; SOS._camRes = null; r(!!ok); } };
+  SOS.enableCamera = async function () {
+    if (SOS.camState === 'on') { SOS.setEnv('passthrough'); return true; }
+    if (SOS.camState === 'asking') return false;
+    SOS.camState = 'asking';
+    try {
+      if (hasNative && typeof window.NativeBridge.hasCameraPermission === 'function' && !window.NativeBridge.hasCameraPermission()) {
+        const ok = await new Promise(function (res) { SOS._camRes = res; try { window.NativeBridge.requestCameraPermission(); } catch (e) { res(false); } setTimeout(function () { if (SOS._camRes === res) { SOS._camRes = null; res(false); } }, 60000); });
+        if (!ok) { SOS.camState = 'blocked'; SOS.toast('Camera is blocked. Android Settings > Apps > SpatialOS > Permissions > Camera, then Allow.', 7); return false; }
+      }
+      const video = document.getElementById('cam');
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 24, max: 30 } }, audio: false });
+      video.srcObject = stream; video.muted = true; video.setAttribute('playsinline', ''); await video.play();
+      SOS.stream = stream; SOS.attachVideo(video); SOS.camState = 'on'; SOS.settings.camera = true; SOS.save();
+      SOS.setEnv('passthrough');
+      if (SOS.settings.hands && SOS.startHands) setTimeout(function () { SOS.startHands(); }, 600);
+      return true;
+    } catch (e) {
+      SOS.camState = 'error'; SOS.camErr = String(e);
+      SOS.toast('Camera could not start. Check the permission and try again.', 5);
+      return false;
+    }
+  };
+  SOS.disableCamera = function () {
+    if (SOS.stream) { try { SOS.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} }
+    SOS.stream = null; const v = document.getElementById('cam'); try { v.srcObject = null; } catch (e) {}
+    SOS.camState = 'off'; SOS.settings.camera = false; SOS.save();
+    if (SOS.stopHands) SOS.stopHands();
+    if (SOS.env === 'passthrough') SOS.setEnv('night');
+  };
+  SOS.toast = function (msg, secs) { if (SOS.apps.toast) SOS.apps.toast.show(msg, secs || 3.5); };
+
+  /* ---------- boot: prepare (behind the loading screen) then start ---------- */
+  SOS.prepare = function () {
     resize(); applySettingsNative();
-    SOS.setEnv(SOS.settings.env || 'passthrough');
-    requestAnimationFrame(function () {
-      SOS.recenter();
-      SOS.open('home', { exact: true, yaw: 0, pitch: 0.02, dist: 2.4 });
-      SOS.open('dock', { exact: true, yaw: 0, pitch: -0.62, dist: 2.0 });
-      last = performance.now(); requestAnimationFrame(loop);
-    });
+    const e0 = SOS.settings.env === 'passthrough' ? 'night' : (SOS.settings.env || 'night');
+    SOS.env = e0; SOS.setEnv(e0, true);
+    try { updatePose(); render(); } catch (e) { console.error('warmup', e); }
+  };
+  SOS.start = function () {
+    SOS.recenter();
+    SOS.open('home', { exact: true, yaw: 0.3, pitch: 0.0, dist: 2.4 });
+    SOS.open('dock', { exact: true, yaw: 0, pitch: -0.85, dist: 2.0 });
+    last = performance.now(); requestAnimationFrame(loop);
   };
   function applySettingsNative() { try { if (hasNative) window.NativeBridge.setMagnetThreshold(SOS.settings.magnetT); } catch (e) {} }
   SOS.pushNative = applySettingsNative;

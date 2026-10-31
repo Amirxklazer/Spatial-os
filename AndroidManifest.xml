@@ -9,6 +9,7 @@
     <application
         android:allowBackup="false"
         android:hardwareAccelerated="true"
+        android:largeHeap="true"
         android:icon="@mipmap/ic_launcher"
         android:label="SpatialOS"
         android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">

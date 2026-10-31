@@ -2,7 +2,10 @@ package com.spatialos.cardboard
 
 import android.Manifest
 import android.app.Activity
+import android.content.ContentValues
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.graphics.Color
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -10,12 +13,18 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
+import android.provider.Settings
+import android.util.Base64
 import android.view.KeyEvent
 import android.view.Surface
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -23,6 +32,9 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import java.io.ByteArrayInputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.io.OutputStream
 import kotlin.math.abs
 import kotlin.math.sqrt
 
@@ -64,6 +76,11 @@ class MainActivity : Activity(), SensorEventListener {
             ?: sm.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
         magSensor = sm.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
 
+        setupWeb()
+        loadApp()
+    }
+
+    private fun setupWeb() {
         web = WebView(this)
         web.setBackgroundColor(Color.BLACK)
         web.overScrollMode = View.OVER_SCROLL_NEVER
@@ -85,6 +102,12 @@ class MainActivity : Activity(), SensorEventListener {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
                 return serve(request)
             }
+
+            // If the web engine's process dies, rebuild the view instead of showing a sad face or closing the app.
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                window.decorView.post { recreateWeb() }
+                return true
+            }
         }
         web.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest) {
@@ -97,13 +120,17 @@ class MainActivity : Activity(), SensorEventListener {
                 }
             }
         }
+    }
 
-        if (Build.VERSION.SDK_INT >= 23 &&
-            checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.CAMERA), 7)
-        } else {
-            loadApp()
+    private fun recreateWeb() {
+        try {
+            (web.parent as? ViewGroup)?.removeView(web)
+            web.destroy()
+        } catch (e: Exception) {
         }
+        pageLoaded = false
+        setupWeb()
+        loadApp()
     }
 
     private fun loadApp() {
@@ -114,7 +141,8 @@ class MainActivity : Activity(), SensorEventListener {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        loadApp()
+        val ok = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+        web.evaluateJavascript("window.SOS && SOS.onCamPerm($ok)", null)
     }
 
     private fun mimeOf(path: String): String {
@@ -173,6 +201,108 @@ class MainActivity : Activity(), SensorEventListener {
         fun quit() {
             runOnUiThread { finishAndRemoveTask() }
         }
+
+        @JavascriptInterface
+        fun hasCameraPermission(): Boolean =
+            checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+
+        @JavascriptInterface
+        fun requestCameraPermission() {
+            runOnUiThread { requestPermissions(arrayOf(Manifest.permission.CAMERA), 7) }
+        }
+
+        @JavascriptInterface
+        fun openAppSettings() {
+            runOnUiThread {
+                val i = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(i)
+            }
+        }
+
+        @JavascriptInterface
+        fun beginSave(name: String, mime: String): Boolean = this@MainActivity.beginSave(name, mime)
+
+        @JavascriptInterface
+        fun appendSave(b64: String): Boolean = this@MainActivity.appendSave(b64)
+
+        @JavascriptInterface
+        fun endSave(): String = this@MainActivity.endSave()
+    }
+
+    // ---- saving photos / videos to the phone ----
+    private var saveOut: OutputStream? = null
+    private var saveUri: Uri? = null
+    private var saveLabel = ""
+
+    private fun closeSaveQuiet() {
+        try { saveOut?.close() } catch (e: Exception) { }
+        saveOut = null
+        saveUri = null
+    }
+
+    private fun beginSave(name: String, mime: String): Boolean {
+        return try {
+            closeSaveQuiet()
+            val video = mime.startsWith("video")
+            if (Build.VERSION.SDK_INT >= 29) {
+                val dir = (if (video) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES) + "/SpatialOS"
+                val values = ContentValues()
+                values.put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                values.put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                values.put(MediaStore.MediaColumns.RELATIVE_PATH, dir)
+                values.put(MediaStore.MediaColumns.IS_PENDING, 1)
+                val collection = if (video) MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                else MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                val uri = contentResolver.insert(collection, values)
+                if (uri == null) {
+                    false
+                } else {
+                    saveUri = uri
+                    saveOut = contentResolver.openOutputStream(uri)
+                    saveLabel = "$dir/$name"
+                    saveOut != null
+                }
+            } else {
+                val base = getExternalFilesDir(if (video) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES)
+                val dir = File(base, "SpatialOS")
+                dir.mkdirs()
+                val f = File(dir, name)
+                saveOut = FileOutputStream(f)
+                saveLabel = f.absolutePath
+                true
+            }
+        } catch (e: Exception) {
+            closeSaveQuiet()
+            false
+        }
+    }
+
+    private fun appendSave(b64: String): Boolean {
+        return try {
+            val out = saveOut ?: return false
+            out.write(Base64.decode(b64, Base64.DEFAULT))
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun endSave(): String {
+        try {
+            saveOut?.flush()
+            saveOut?.close()
+            val uri = saveUri
+            if (uri != null && Build.VERSION.SDK_INT >= 29) {
+                val values = ContentValues()
+                values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                contentResolver.update(uri, values, null, null)
+            }
+        } catch (e: Exception) {
+        }
+        saveOut = null
+        saveUri = null
+        return saveLabel
     }
 
     // ---- sensors ----
