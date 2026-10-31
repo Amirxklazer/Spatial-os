@@ -41,9 +41,7 @@ jobs:
           need() { [ -f "$1" ] || { echo "::error::Missing file in repo root: $1"; exit 1; }; }
 
           for f in settings.gradle build.gradle gradle.properties app_build.gradle AndroidManifest.xml MainActivity.kt ic_launcher.png \
-                   index.html three.min.js core.js apps.js apps2.js handtrack.js mp_hands.js \
-                   hands.binarypb hand_landmark_lite.tflite hands_solution_packed_assets.data hands_solution_packed_assets_loader.js \
-                   hands_solution_simd_wasm_bin.js hands_solution_simd_wasm_bin.wasm hands_solution_wasm_bin.js hands_solution_wasm_bin.wasm; do
+                   index.html three.min.js core.js apps.js apps2.js apps3.js handtrack.js; do
             need "$f"
           done
 
@@ -52,15 +50,19 @@ jobs:
           cp MainActivity.kt "$P/java/com/spatialos/cardboard/MainActivity.kt"
           cp ic_launcher.png "$P/res/mipmap-xxhdpi/ic_launcher.png"
 
-          for f in index.html three.min.js core.js apps.js apps2.js handtrack.js mp_hands.js \
-                   hands.binarypb hand_landmark_lite.tflite hands_solution_packed_assets.data hands_solution_packed_assets_loader.js \
-                   hands_solution_simd_wasm_bin.js hands_solution_simd_wasm_bin.wasm hands_solution_wasm_bin.js hands_solution_wasm_bin.wasm; do
+          for f in index.html three.min.js core.js apps.js apps2.js apps3.js handtrack.js; do
             cp "$f" "$P/assets/$f"
           done
-          # optional empty data file the hand model may ask for
-          [ -f hands_solution_simd_wasm_bin.data ] && cp hands_solution_simd_wasm_bin.data "$P/assets/" || : > "$P/assets/hands_solution_simd_wasm_bin.data"
 
           echo "Project layout:"; find app -type f | sort
+
+      # The hand-tracking model is downloaded here so you never have to upload it.
+      - name: Download hand tracking model
+        run: |
+          set -e
+          curl -fL --retry 4 --retry-delay 3 -o app/src/main/assets/hand_landmarker.task \
+            https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
+          ls -l app/src/main/assets/hand_landmarker.task
 
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon --stacktrace
