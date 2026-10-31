@@ -196,7 +196,7 @@
     const head = function (l) { return { type: 'head', label: l, h: 56 }; };
     if (pane === 'general') return [head('SPACE'), { type: 'button', label: 'Recenter view', note: 'Face forward, then tap', onClick: function () { SOS.recenter(); } }, { type: 'button', label: 'Open Home', onClick: function () { SOS.toggleHome(); } },
       head('SYSTEM'), { type: 'button', label: 'Restore default settings', onClick: function () { SOS.resetSettings(); SOS.setEnv('passthrough'); SOS.setResScale(); win.dirty = true; } }, { type: 'button', label: 'Shut Down', color: '#ff453a', onClick: function () { SOS.quit(); } }];
-    if (pane === 'display') return [head('LENSES'), sl('Eye distance', 'ipd', 54, 74, 1, function (v) { return v + ' mm'; }), sl('Field of view', 'fov', 60, 100, 1, function (v) { return v + '°'; }), t('Lens distortion correction', 'distortion'), sl('Lens strength', 'lens', 0, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }),
+    if (pane === 'display') return [head('LENSES'), sl('Eye distance', 'ipd', 54, 74, 1, function (v) { return v + ' mm'; }), sl('Lens spacing (fixes double view)', 'lensSep', 50, 76, 1, function (v) { return v + ' mm'; }), sl('Field of view', 'fov', 60, 100, 1, function (v) { return v + '°'; }), t('Lens distortion correction', 'distortion'), sl('Lens strength', 'lens', 0, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }),
       head('DISPLAY'), sl('Render quality', 'resScale', 0.5, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }, function () { SOS.setResScale(); }), t('Centre divider', 'divider'), sl('Window size', 'winScale', 0.7, 1.4, 0.05, function (v) { return Math.round(v * 100) + '%'; })];
     if (pane === 'passthrough') {
       const cs = SOS.camState, csTxt = cs === 'on' ? 'Live' : cs === 'asking' ? 'Asking for permission…' : cs === 'blocked' ? 'Blocked' : cs === 'error' ? 'Error' : 'Off';
@@ -210,7 +210,7 @@
       head('CARDBOARD'), t('Magnet button', 'magnet'), sl('Magnet trigger', 'magnetT', 15, 120, 5, function (v) { return v + ' µT'; }, function () { SOS.pushNative(); }), { type: 'info', label: 'Touch button', value: 'Tap = select · Hold = Home' },
       head('GAZE'), t('Dwell to select', 'dwell'), sl('Dwell time', 'dwellT', 0.6, 3, 0.1, function (v) { return v.toFixed(1) + ' s'; })];
     if (pane === 'sound') return [head('AUDIO'), t('Interface sounds', 'sound'), sl('Volume', 'volume', 0, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }, function () { SOS.tick(1200, 0.08, 0.1); })];
-    return [head('SPATIALOS'), { type: 'info', label: 'Version', value: '1.1' }, { type: 'info', label: 'Frame rate', value: SOS.fps + ' fps' }, { type: 'info', label: 'Head tracking', value: SOS.nativeOK ? 'Gyroscope' : 'Mouse / keys' }, { type: 'info', label: 'Camera', value: SOS.camState === 'on' ? 'Live' : 'Off' },
+    return [head('SPATIALOS'), { type: 'info', label: 'Version', value: '1.2' }, { type: 'info', label: 'Frame rate', value: SOS.fps + ' fps' }, { type: 'info', label: 'Head tracking', value: SOS.nativeOK ? 'Gyroscope' : 'Mouse / keys' }, { type: 'info', label: 'Camera', value: SOS.camState === 'on' ? 'Live' : 'Off' },
       { type: 'info', label: 'Hands', value: !S.hands ? 'Off' : SOS.handsState }, { type: 'info', label: 'Open windows', value: String(Object.keys(SOS.wins).length) }];
   }
   SOS.apps.settings.tick = function (win) { if (win.state.pane === 'about' || win.state.pane === 'input' || win.state.pane === 'passthrough') { win._t = (win._t || 0) + 1; if (win._t % 20 === 0) win.dirty = true; } };

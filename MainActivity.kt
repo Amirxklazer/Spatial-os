@@ -5,6 +5,20 @@ import android.app.Activity
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.ImageFormat
+import android.graphics.Rect
+import android.graphics.YuvImage
+import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraDevice
+import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureRequest
+import android.media.Image
+import android.media.ImageReader
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.SystemClock
+import android.util.DisplayMetrics
 import android.net.Uri
 import android.graphics.Color
 import android.hardware.Sensor
@@ -32,6 +46,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
@@ -169,6 +184,10 @@ class MainActivity : Activity(), SensorEventListener {
             return WebResourceResponse("text/plain", "utf-8", 403, "Forbidden", headers, ByteArrayInputStream(ByteArray(0)))
         }
         var path = uri.path ?: "/"
+        if (path == "/cam.jpg") {
+            val b = camJpeg ?: ByteArray(0)
+            return WebResourceResponse("image/jpeg", null, 200, "OK", headers, ByteArrayInputStream(b))
+        }
         if (path == "/" || path.isEmpty()) path = "/index.html"
         val name = path.trimStart('/')
         return try {
@@ -209,6 +228,37 @@ class MainActivity : Activity(), SensorEventListener {
         @JavascriptInterface
         fun requestCameraPermission() {
             runOnUiThread { requestPermissions(arrayOf(Manifest.permission.CAMERA), 7) }
+        }
+
+        @JavascriptInterface
+        fun startCamera(): Boolean {
+            camWanted = true
+            return startNativeCamera()
+        }
+
+        @JavascriptInterface
+        fun stopCamera() {
+            camWanted = false
+            stopNativeCamera()
+        }
+
+        @JavascriptInterface
+        fun camStatus(): String = if (camState == "error") "error: $camErr" else camState
+
+        @JavascriptInterface
+        fun camSeq(): Int = camSeqN
+
+        @JavascriptInterface
+        fun camRot(): Int = camRotation()
+
+        @JavascriptInterface
+        fun screenMM(): Double {
+            val dm = DisplayMetrics()
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.getRealMetrics(dm)
+            val longPx = Math.max(dm.widthPixels, dm.heightPixels).toDouble()
+            val dpi = if (dm.widthPixels >= dm.heightPixels) dm.xdpi.toDouble() else dm.ydpi.toDouble()
+            return if (dpi > 50) longPx / dpi * 25.4 else 150.0
         }
 
         @JavascriptInterface
@@ -305,6 +355,168 @@ class MainActivity : Activity(), SensorEventListener {
         return saveLabel
     }
 
+    // ---- native camera (Camera2) -> JPEG frames served at /cam.jpg ----
+    private var camDev: CameraDevice? = null
+    private var camSession: CameraCaptureSession? = null
+    private var camReader: ImageReader? = null
+    private var camThread: HandlerThread? = null
+    private var camHandler: Handler? = null
+    @Volatile private var camJpeg: ByteArray? = null
+    @Volatile private var camState = "off"
+    @Volatile private var camErr = ""
+    @Volatile private var camWanted = false
+    private var camSensor = 90
+    private var camFront = false
+    private var camLastMs = 0L
+
+    private fun camRotation(): Int {
+        @Suppress("DEPRECATION")
+        val d = when (windowManager.defaultDisplay.rotation) {
+            Surface.ROTATION_90 -> 90
+            Surface.ROTATION_180 -> 180
+            Surface.ROTATION_270 -> 270
+            else -> 0
+        }
+        return if (camFront) (camSensor + d) % 360 else (camSensor - d + 360) % 360
+    }
+
+    private fun startNativeCamera(): Boolean {
+        if (camState == "on" || camState == "starting") return true
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            camState = "error"; camErr = "no permission"; return false
+        }
+        camState = "starting"
+        try {
+            val cm = getSystemService(CAMERA_SERVICE) as CameraManager
+            var id: String? = null
+            for (c in cm.cameraIdList) {
+                val ch = cm.getCameraCharacteristics(c)
+                if (ch.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK) { id = c; break }
+            }
+            if (id == null) id = cm.cameraIdList.firstOrNull()
+            if (id == null) { camState = "error"; camErr = "no camera"; return false }
+            val ch = cm.getCameraCharacteristics(id)
+            camSensor = ch.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+            camFront = ch.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+            val map = ch.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            val sizes = map?.getOutputSizes(ImageFormat.YUV_420_888)
+            if (sizes == null || sizes.isEmpty()) { camState = "error"; camErr = "no sizes"; return false }
+            var best = sizes.filter { it.width <= 960 && it.height <= 720 }.maxByOrNull { it.width * it.height }
+            if (best == null) best = sizes.minByOrNull { it.width * it.height }!!
+            val th = HandlerThread("cam")
+            th.start()
+            camThread = th
+            val h = Handler(th.looper)
+            camHandler = h
+            val reader = ImageReader.newInstance(best.width, best.height, ImageFormat.YUV_420_888, 2)
+            camReader = reader
+            reader.setOnImageAvailableListener({ r ->
+                val img = try { r.acquireLatestImage() } catch (e: Exception) { null }
+                if (img != null) {
+                    try {
+                        val now = SystemClock.uptimeMillis()
+                        if (now - camLastMs >= 45L) {
+                            camLastMs = now
+                            val jpg = yuvToJpeg(img)
+                            if (jpg != null) { camJpeg = jpg; camSeqN += 1 }
+                        }
+                    } catch (e: Exception) {
+                    } finally {
+                        img.close()
+                    }
+                }
+            }, h)
+            cm.openCamera(id, object : CameraDevice.StateCallback() {
+                override fun onOpened(device: CameraDevice) {
+                    camDev = device
+                    try {
+                        @Suppress("DEPRECATION")
+                        device.createCaptureSession(listOf(reader.surface), object : CameraCaptureSession.StateCallback() {
+                            override fun onConfigured(session: CameraCaptureSession) {
+                                camSession = session
+                                try {
+                                    val rb = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                                    rb.addTarget(reader.surface)
+                                    rb.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                                    session.setRepeatingRequest(rb.build(), null, h)
+                                    camState = "on"
+                                } catch (e: Exception) {
+                                    camState = "error"; camErr = "request: " + e.message
+                                }
+                            }
+
+                            override fun onConfigureFailed(session: CameraCaptureSession) {
+                                camState = "error"; camErr = "configure failed"
+                            }
+                        }, h)
+                    } catch (e: Exception) {
+                        camState = "error"; camErr = "session: " + e.message
+                    }
+                }
+
+                override fun onDisconnected(device: CameraDevice) {
+                    camState = "error"; camErr = "disconnected"
+                    try { device.close() } catch (e: Exception) { }
+                    camDev = null
+                }
+
+                override fun onError(device: CameraDevice, error: Int) {
+                    camState = "error"; camErr = "error $error"
+                    try { device.close() } catch (e: Exception) { }
+                    camDev = null
+                }
+            }, h)
+            return true
+        } catch (e: Exception) {
+            camState = "error"; camErr = e.message ?: "start failed"
+            stopNativeCamera()
+            camState = "error"
+            return false
+        }
+    }
+
+    private fun stopNativeCamera() {
+        try { camSession?.close() } catch (e: Exception) { }
+        try { camDev?.close() } catch (e: Exception) { }
+        try { camReader?.close() } catch (e: Exception) { }
+        try { camThread?.quitSafely() } catch (e: Exception) { }
+        camSession = null; camDev = null; camReader = null; camThread = null; camHandler = null
+        camState = "off"
+        camJpeg = null
+    }
+
+    private fun yuvToJpeg(img: Image): ByteArray? {
+        val w = img.width
+        val h = img.height
+        val yP = img.planes[0]
+        val uP = img.planes[1]
+        val vP = img.planes[2]
+        val nv = ByteArray(w * h * 3 / 2)
+        val yb = yP.buffer
+        val yRow = yP.rowStride
+        if (yRow == w) {
+            yb.position(0)
+            yb.get(nv, 0, w * h)
+        } else {
+            for (r in 0 until h) {
+                yb.position(r * yRow)
+                yb.get(nv, r * w, w)
+            }
+        }
+        val ub = uP.buffer
+        val vb = vP.buffer
+        var o = w * h
+        for (r in 0 until h / 2) {
+            for (c in 0 until w / 2) {
+                nv[o++] = vb.get(r * vP.rowStride + c * vP.pixelStride)
+                nv[o++] = ub.get(r * uP.rowStride + c * uP.pixelStride)
+            }
+        }
+        val out = ByteArrayOutputStream(w * h / 6)
+        YuvImage(nv, ImageFormat.NV21, w, h, null).compressToJpeg(Rect(0, 0, w, h), 70, out)
+        return out.toByteArray()
+    }
+
     // ---- sensors ----
     @Suppress("DEPRECATION")
     private fun displayRotation(): Int = windowManager.defaultDisplay.rotation
@@ -365,17 +577,20 @@ class MainActivity : Activity(), SensorEventListener {
         super.onResume()
         hideSystemUi()
         web.onResume()
+        if (camWanted) startNativeCamera()
         rotSensor?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_FASTEST) }
         magSensor?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
     }
 
     override fun onPause() {
+        if (camWanted) stopNativeCamera()
         sm.unregisterListener(this)
         web.onPause()
         super.onPause()
     }
 
     override fun onDestroy() {
+        stopNativeCamera()
         web.destroy()
         super.onDestroy()
     }

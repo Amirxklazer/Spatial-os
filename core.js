@@ -5,9 +5,11 @@
   const SOS = (window.SOS = { apps: {}, wins: {}, hands: [], env: 'passthrough', videoReady: false, video: null, t: 0, fps: 60, zc: 1, vidAspect: 16 / 9, yawRaw: 0, pitchRaw: 0 });
 
   /* ---------- settings ---------- */
-  const DEF = { ipd: 63, fov: 82, distortion: true, lens: 0.5, resScale: 0.8, divider: true, winScale: 1, bright: 1, hands: true, palm: true, magnet: true, magnetT: 45, dwell: false, dwellT: 1.4, handCursor: false, volume: 0.7, sound: true, env: 'night', camera: false };
+  const DEF = { ipd: 63, lensSep: 62, fov: 82, distortion: true, lens: 0.5, resScale: 0.8, divider: true, winScale: 1, bright: 1, hands: false, palm: true, magnet: true, magnetT: 45, dwell: false, dwellT: 1.4, handCursor: false, volume: 0.7, sound: true, env: 'night', camera: false };
   SOS.settings = Object.assign({}, DEF);
   try { Object.assign(SOS.settings, JSON.parse(localStorage.getItem('sos.settings') || '{}')); } catch (e) {}
+  // v1.2 migration: hand tracking was the likely crash source, so it starts off again for everyone
+  try { if (localStorage.getItem('sos.v') !== '1.2') { SOS.settings.hands = false; SOS.settings.camera = false; localStorage.setItem('sos.v', '1.2'); } } catch (e) {}
   SOS.save = function () { try { localStorage.setItem('sos.settings', JSON.stringify(SOS.settings)); } catch (e) {} };
   SOS.resetSettings = function () { Object.assign(SOS.settings, DEF); SOS.save(); SOS.applySettings(); };
 
@@ -59,10 +61,10 @@
   const bgMesh = new T.Mesh(new T.PlaneGeometry(2, 2), bgMat); bgMesh.frustumCulled = false; bgScene.add(bgMesh);
 
   const distMat = new T.ShaderMaterial({
-    uniforms: { tex: { value: null }, k1: { value: 0.2 }, k2: { value: 0.1 }, asp: { value: 1.1 }, on: { value: 1 }, zoom: { value: 0.86 } },
+    uniforms: { tex: { value: null }, k1: { value: 0.2 }, k2: { value: 0.1 }, asp: { value: 1.1 }, on: { value: 1 }, zoom: { value: 0.86 }, cx: { value: new T.Vector2(0.25, 0.75) } },
     vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.,1.); }',
-    fragmentShader: 'uniform sampler2D tex; uniform float k1,k2,asp,on,zoom; varying vec2 vUv;' +
-      'void main(){ float eye=step(0.5,vUv.x); vec2 e=vec2(vUv.x*2.-eye, vUv.y); vec2 c=e*2.-1.; vec2 q=vec2(c.x*asp,c.y);' +
+    fragmentShader: 'uniform sampler2D tex; uniform float k1,k2,asp,on,zoom; uniform vec2 cx; varying vec2 vUv;' +
+      'void main(){ float eye=step(0.5,vUv.x); vec2 e=vec2(vUv.x*2.-eye, vUv.y); vec2 c=e*2.-1.; c.x-=(mix(cx.x,cx.y,eye)-mix(.25,.75,eye))*4.; vec2 q=vec2(c.x*asp,c.y);' +
       ' float r2=dot(q,q)/(asp*asp+1.); float f= on>.5 ? (1.+k1*r2+k2*r2*r2)*zoom : 1.; q*=f; vec2 s=vec2(q.x/asp,q.y)*.5+.5;' +
       ' if(s.x<0.||s.x>1.||s.y<0.||s.y>1.){ gl_FragColor=vec4(0.,0.,0.,1.); return; } s.x=(s.x+eye)*.5; gl_FragColor=vec4(texture2D(tex,s).rgb,1.); }',
     depthTest: false, depthWrite: false
@@ -90,6 +92,7 @@
     distMat.uniforms.k1.value = 0.36 * s.lens; distMat.uniforms.k2.value = 0.18 * s.lens;
     distMat.uniforms.zoom.value = 1 / (1 + 0.5 * s.lens) * 1.05;
     bgMat.uniforms.bright.value = s.bright;
+    { let wmm = 150; try { if (window.NativeBridge && NativeBridge.screenMM) wmm = NativeBridge.screenMM() || 150; } catch (e) {} wmm = Math.max(90, Math.min(220, wmm)); const h = (s.lensSep || 62) / wmm / 2; distMat.uniforms.cx.value.set(0.5 - h, 0.5 + h); }
     const dv = document.getElementById('divider'); if (dv) dv.style.display = s.divider ? 'block' : 'none';
   }
   SOS.applySettings = function () { applyCams(); };
@@ -98,11 +101,6 @@
 
   /* ---------- camera passthrough bg ---------- */
   let vtex = null;
-  SOS.attachVideo = function (video) {
-    SOS.video = video;
-    vtex = new T.VideoTexture(video); vtex.minFilter = T.LinearFilter; vtex.magFilter = T.LinearFilter; vtex.generateMipmaps = false;
-    bgMat.uniforms.map.value = vtex;
-  };
   // camera uv (0..1, y down) -> eye-normalised coords (0..1, y down) given cover-fit
   SOS.camToEye = function (u, v) {
     const va = SOS.vidAspect, ea = eyeAsp;
@@ -647,31 +645,76 @@
   SOS.camState = 'off'; // off | asking | on | blocked | error
   SOS.stream = null;
   SOS.onCamPerm = function (ok) { if (SOS._camRes) { const r = SOS._camRes; SOS._camRes = null; r(!!ok); } };
+  // Native camera (Android Camera2) -> JPEG frames -> a canvas that behaves like a <video> for the rest of the app.
+  const camCv = document.createElement('canvas'); camCv.width = 640; camCv.height = 360;
+  const camCtx = camCv.getContext('2d');
+  Object.defineProperty(camCv, 'videoWidth', { get: function () { return camCv._ok ? camCv.width : 0; } });
+  Object.defineProperty(camCv, 'videoHeight', { get: function () { return camCv._ok ? camCv.height : 0; } });
+  camCv.readyState = 0; camCv.HAVE_CURRENT_DATA = 2;
+  let camTimer = 0, camSeqSeen = -1, camBusy = false, camTex = null, camNative = false;
+  function camPump() {
+    if (camBusy || SOS.camState !== 'on') return;
+    let seq = 0; try { seq = NativeBridge.camSeq(); } catch (e) { return; }
+    if (seq === camSeqSeen || seq === 0) return;
+    camBusy = true; camSeqSeen = seq;
+    fetch('https://appassets.androidplatform.net/cam.jpg?s=' + seq, { cache: 'no-store' }).then(function (r) { return r.blob(); }).then(function (b) { return createImageBitmap(b); }).then(function (bm) {
+      let rot = 0; try { rot = NativeBridge.camRot(); } catch (e) {}
+      const sw = bm.width, sh = bm.height, swap = rot === 90 || rot === 270;
+      const w = swap ? sh : sw, h = swap ? sw : sh;
+      if (camCv.width !== w || camCv.height !== h) { camCv.width = w; camCv.height = h; }
+      camCtx.save(); camCtx.translate(w / 2, h / 2); camCtx.rotate(rot * Math.PI / 180); camCtx.drawImage(bm, -sw / 2, -sh / 2); camCtx.restore();
+      try { bm.close(); } catch (e) {}
+      camCv._ok = true; camCv.readyState = 4; if (camTex) camTex.needsUpdate = true;
+    }).catch(function () {}).then(function () { camBusy = false; });
+  }
+  SOS.attachVideo = function (video) {
+    SOS.video = video;
+    if (video === camCv) { camTex = new T.CanvasTexture(camCv); camTex.minFilter = T.LinearFilter; camTex.magFilter = T.LinearFilter; camTex.generateMipmaps = false; vtex = camTex; }
+    else { vtex = new T.VideoTexture(video); vtex.minFilter = T.LinearFilter; vtex.magFilter = T.LinearFilter; vtex.generateMipmaps = false; }
+    bgMat.uniforms.map.value = vtex;
+  };
   SOS.enableCamera = async function () {
     if (SOS.camState === 'on') { SOS.setEnv('passthrough'); return true; }
     if (SOS.camState === 'asking') return false;
     SOS.camState = 'asking';
     try {
-      if (hasNative && typeof window.NativeBridge.hasCameraPermission === 'function' && !window.NativeBridge.hasCameraPermission()) {
+      const nat = hasNative && typeof window.NativeBridge.startCamera === 'function';
+      if (nat && !window.NativeBridge.hasCameraPermission()) {
         const ok = await new Promise(function (res) { SOS._camRes = res; try { window.NativeBridge.requestCameraPermission(); } catch (e) { res(false); } setTimeout(function () { if (SOS._camRes === res) { SOS._camRes = null; res(false); } }, 60000); });
         if (!ok) { SOS.camState = 'blocked'; SOS.toast('Camera is blocked. Android Settings > Apps > SpatialOS > Permissions > Camera, then Allow.', 7); return false; }
       }
-      const video = document.getElementById('cam');
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 24, max: 30 } }, audio: false });
-      video.srcObject = stream; video.muted = true; video.setAttribute('playsinline', ''); await video.play();
-      SOS.stream = stream; SOS.attachVideo(video); SOS.camState = 'on'; SOS.settings.camera = true; SOS.save();
+      if (nat) {
+        camNative = true; camCv._ok = false; camCv.readyState = 0; camSeqSeen = -1;
+        if (!window.NativeBridge.startCamera()) throw new Error('native camera: ' + window.NativeBridge.camStatus());
+        SOS.camState = 'on';
+        for (let i = 0; i < 100 && window.NativeBridge.camStatus() === 'starting'; i++) await new Promise(function (r) { setTimeout(r, 50); });
+        if (window.NativeBridge.camStatus() !== 'on') throw new Error(window.NativeBridge.camStatus());
+        SOS.attachVideo(camCv);
+        try { SOS.stream = camCv.captureStream(24); } catch (e) { SOS.stream = null; }
+        clearInterval(camTimer); camTimer = setInterval(camPump, 40);
+      } else {
+        const video = document.getElementById('cam');
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 24, max: 30 } }, audio: false });
+        video.srcObject = stream; video.muted = true; video.setAttribute('playsinline', ''); await video.play();
+        SOS.stream = stream; SOS.attachVideo(video); camNative = false;
+      }
+      SOS.camState = 'on'; SOS.settings.camera = true; SOS.save();
       SOS.setEnv('passthrough');
-      if (SOS.settings.hands && SOS.startHands) setTimeout(function () { SOS.startHands(); }, 600);
+      if (SOS.settings.hands && SOS.startHands) setTimeout(function () { SOS.startHands(); }, 900);
       return true;
     } catch (e) {
+      try { if (camNative) window.NativeBridge.stopCamera(); } catch (e2) {}
       SOS.camState = 'error'; SOS.camErr = String(e);
       SOS.toast('Camera could not start. Check the permission and try again.', 5);
       return false;
     }
   };
   SOS.disableCamera = function () {
+    clearInterval(camTimer);
+    try { if (camNative) window.NativeBridge.stopCamera(); } catch (e) {}
     if (SOS.stream) { try { SOS.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} }
-    SOS.stream = null; const v = document.getElementById('cam'); try { v.srcObject = null; } catch (e) {}
+    SOS.stream = null; camCv._ok = false; camCv.readyState = 0;
+    if (!camNative) { const v = document.getElementById('cam'); try { v.srcObject = null; } catch (e) {} }
     SOS.camState = 'off'; SOS.settings.camera = false; SOS.save();
     if (SOS.stopHands) SOS.stopHands();
     if (SOS.env === 'passthrough') SOS.setEnv('night');
