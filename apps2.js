@@ -101,6 +101,7 @@
     id: 'camera', title: 'Camera', w: 1160, h: 680, animated: true,
     create(win) { win.state = { mode: 'photo', rec: null, flash: -9, auto: true }; MEDIA.load().then(function () { win.dirty = true; }); },
     onClose(win) { stopRec(win); },
+    shoot() { const w = SOS.wins.camera; if (w && SOS.camState === 'on' && SOS.videoReady) { shoot(w); w.dirty = true; } else SOS.toast('Turn on the camera first.', 2.5); },
     tick(win) { const r = win.state.rec; if (r && performance.now() - r.t0 > 300000) stopRec(win); },
     draw(ui, win) {
       const c = ui.c, st = win.state, on = SOS.camState === 'on' && SOS.videoReady;

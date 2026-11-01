@@ -10,21 +10,9 @@
   #cam { position: fixed; left: 0; top: 0; width: 4px; height: 4px; opacity: 0.01; pointer-events: none; }
   #divider { position: fixed; left: 50%; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: rgba(255,255,255,.9); pointer-events: none; }
   #gear { position: fixed; left: 50%; bottom: 10px; width: 36px; height: 36px; margin-left: -18px; pointer-events: none; opacity: .85; }
-  /* loading screen: identical in both halves so it reads in the viewer */
-  #loader { position: fixed; inset: 0; z-index: 10; background: radial-gradient(ellipse at 50% 40%, #0f1630 0%, #05070d 70%); color: #fff; display: flex; transition: opacity .45s; }
+  #loader { position: fixed; inset: 0; z-index: 10; background: #000; transition: opacity .6s; }
   #loader.gone { opacity: 0; pointer-events: none; }
-  #loader .eye { width: 50%; height: 100%; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-  #loader .box { width: 70%; text-align: center; }
-  #loader svg { width: 11vh; height: 11vh; }
-  #loader .title { font-size: 7vh; font-weight: 700; letter-spacing: .02em; margin-top: 1.5vh; }
-  #loader .ver { font-size: 2.8vh; opacity: .6; margin-top: .4vh; }
-  #loader .status { font-size: 3.2vh; opacity: .85; margin-top: 4vh; min-height: 4vh; }
-  #loader .bar { height: 1.1vh; background: rgba(255,255,255,.14); border-radius: 1vh; margin: 2vh auto 0; width: 80%; overflow: hidden; }
-  #loader .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #4fc3ff, #0a84ff); border-radius: 1vh; transition: width .25s; }
-  #loader .big { font-size: 5.6vh; font-weight: 700; margin-top: 3.5vh; line-height: 1.15; display: none; }
-  #loader .sub { font-size: 2.8vh; opacity: .7; margin-top: 1.6vh; min-height: 3vh; }
-  #loader .warn { font-size: 2.5vh; color: #ffd60a; margin-top: 2vh; min-height: 2.5vh; line-height: 1.25; }
-  #ldiv { position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: rgba(255,255,255,.5); }
+  #boot { width: 100%; height: 100%; display: block; }
 </style>
 </head>
 <body>
@@ -33,24 +21,100 @@
 <div id="divider"></div>
 <svg id="gear" viewBox="0 0 24 24" fill="#fff"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6a.5.5 0 0 0 .1-.6l-2-3.5a.5.5 0 0 0-.6-.2l-2.5 1a7.3 7.3 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.4h-4a.5.5 0 0 0-.5.4l-.4 2.6a7.3 7.3 0 0 0-1.7 1l-2.5-1a.5.5 0 0 0-.6.2l-2 3.5a.5.5 0 0 0 .1.6L4.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6a.5.5 0 0 0-.1.6l2 3.5c.1.2.4.3.6.2l2.5-1c.5.4 1.1.7 1.7 1l.4 2.6c0 .2.2.4.5.4h4c.3 0 .5-.2.5-.4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.5 1c.2.1.5 0 .6-.2l2-3.5a.5.5 0 0 0-.1-.6L19.4 13zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>
 
-<div id="loader">
-  <div class="eye"></div><div class="eye"></div><div id="ldiv"></div>
-</div>
+<div id="loader"><canvas id="boot"></canvas></div>
 
 <script>
 (function () {
-  var box = '<div class="box"><svg viewBox="0 0 64 64"><rect x="4" y="18" width="56" height="30" rx="12" fill="#fff"/><circle cx="21" cy="33" r="9" fill="#0a63ff"/><circle cx="43" cy="33" r="9" fill="#0a63ff"/><rect x="29" y="18" width="6" height="16" fill="#0a63ff"/></svg>' +
-    '<div class="title">SpatialOS</div><div class="ver">version 1.3</div><div class="status">Starting…</div><div class="bar"><i></i></div>' +
-    '<div class="big">Put your phone<br>in your viewer</div><div class="sub"></div><div class="warn"></div></div>';
-  var eyes = document.querySelectorAll('#loader .eye'); eyes[0].innerHTML = box; eyes[1].innerHTML = box;
-  function all(sel, fn) { document.querySelectorAll('#loader ' + sel).forEach(fn); }
-  function status(t, p) { all('.status', function (e) { e.textContent = t; }); if (p != null) all('.bar i', function (e) { e.style.width = Math.round(p * 100) + '%'; }); }
-  function sub(t) { all('.sub', function (e) { e.textContent = t; }); }
-  function warn(t) { all('.warn', function (e) { e.textContent = t; }); }
+  /* ---------------- 20 second boot animation (stereo: one image per eye, centred on the lenses) ---------------- */
+  var BOOT_SECONDS = 20;
+  var cv = document.getElementById('boot'), cx = cv.getContext('2d', { willReadFrequently: true });
+  var bootStatus = 'Starting…', bootProg = 0, bootWarn = '', bootFail = '', ready = false, started = false, t0 = performance.now();
+  function status(t, p) { bootStatus = t; if (p != null) bootProg = p; }
+  function warn(t) { bootWarn = t; }
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
   function loadScript(src) { return new Promise(function (res, rej) { var s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = function () { rej(new Error('Could not load ' + src)); }; document.body.appendChild(s); }); }
   function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
+  function ease(x) { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); }
+  function win(t, a, b, c, d) { return ease((t - a) / (b - a)) * (1 - ease((t - c) / (d - c))); }   // fade in a..b, hold, fade out c..d
+
+  function lensSepPx() {
+    var sep = 62, mm = 150;
+    try { var s = JSON.parse(lsGet('sos.settings') || '{}'); if (s.lensSep) sep = s.lensSep; } catch (e) {}
+    try { if (window.NativeBridge && NativeBridge.screenMM) mm = NativeBridge.screenMM() || 150; } catch (e) {}
+    mm = clamp(mm, 90, 220); return clamp(sep / mm, 0.2, 0.9) * cv.width;
+  }
+  function resize() { var d = Math.min(window.devicePixelRatio || 1, 1.0); cv.width = Math.round(innerWidth * d); cv.height = Math.round(innerHeight * d); }  // low-res on purpose: smooth and cheap on any phone
+  resize(); addEventListener('resize', resize);
+
+  function arms(c, x, y, R, t, spin, hueBase) {
+    c.save(); c.globalCompositeOperation = 'lighter'; c.lineCap = 'round';
+    for (var a = 0; a < 3; a++) {
+      var hue = (t * 40 + a * 120 + hueBase) % 360; c.beginPath();
+      for (var i = 0; i <= 46; i++) { var k = i / 46, ang = spin + a * (Math.PI * 2 / 3) + k * 5.2, rad = R * (0.06 + 0.9 * k), px = x + Math.cos(ang) * rad, py = y + Math.sin(ang) * rad; if (i) c.lineTo(px, py); else c.moveTo(px, py); }
+      c.strokeStyle = 'hsla(' + hue + ',95%,66%,.8)'; c.lineWidth = R * 0.13; c.stroke();
+      c.strokeStyle = 'hsla(' + hue + ',100%,88%,.6)'; c.lineWidth = R * 0.04; c.stroke();
+    }
+    c.restore();
+  }
+  function text(c, s, x, y, size, alpha, weight, color) { if (alpha <= 0.01) return; c.save(); c.globalAlpha = alpha; c.fillStyle = color || '#fff'; c.font = (weight || 600) + ' ' + size + 'px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(s, x, y); c.restore(); }
+
+  function drawEye(c, ex, ey, u, t, remain) {
+    var move = ease((t - 11.5) / 1.6);                                  // orb floats up when the instructions appear
+    var bloom = ease(t / 3.2), grow = ease((t - 1.6) / 4.5);
+    var R = u * (14 + 118 * grow) * (1 - 0.38 * move), oy = ey - u * 150 * move + u * 10 * (1 - move) * 0;
+    // glow
+    var g = c.createRadialGradient(ex, oy, 0, ex, oy, u * (40 + 340 * bloom)); g.addColorStop(0, 'rgba(120,150,255,' + (0.5 * bloom) + ')'); g.addColorStop(0.5, 'rgba(90,60,200,' + (0.18 * bloom) + ')'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    var gr = u * (40 + 340 * bloom); c.fillStyle = g; c.fillRect(ex - gr, oy - gr, gr * 2, gr * 2);
+    // glass body
+    c.save(); c.beginPath(); c.arc(ex, oy, R, 0, 7); c.clip();
+    g = c.createRadialGradient(ex - R * 0.3, oy - R * 0.35, R * 0.1, ex, oy, R); g.addColorStop(0, 'rgba(255,255,255,.3)'); g.addColorStop(0.55, 'rgba(150,175,255,.14)'); g.addColorStop(1, 'rgba(15,20,50,.6)'); c.fillStyle = g; c.fillRect(ex - R, oy - R, R * 2, R * 2);
+    arms(c, ex, oy, R * 0.9, t, t * (0.7 + (t > 17 ? 3 : 0)), 200);
+    g = c.createRadialGradient(ex, oy, 0, ex, oy, R * 0.25); g.addColorStop(0, 'rgba(255,255,255,.95)'); g.addColorStop(1, 'rgba(255,255,255,0)'); c.fillStyle = g; c.beginPath(); c.arc(ex, oy, R * 0.25, 0, 7); c.fill();
+    g = c.createRadialGradient(ex - R * 0.4, oy - R * 0.45, 0, ex - R * 0.4, oy - R * 0.45, R * 0.5); g.addColorStop(0, 'rgba(255,255,255,.7)'); g.addColorStop(1, 'rgba(255,255,255,0)'); c.fillStyle = g; c.fillRect(ex - R, oy - R, R * 2, R * 2);
+    c.restore();
+    c.strokeStyle = 'rgba(255,255,255,.75)'; c.lineWidth = Math.max(1, R * 0.04); c.beginPath(); c.arc(ex, oy, R, 0, 7); c.stroke();
+    // ripples while booting
+    for (var k = 0; k < 3; k++) { var p = ((t * 0.35 + k / 3) % 1); c.strokeStyle = 'rgba(160,180,255,' + (0.25 * (1 - p) * bloom) + ')'; c.lineWidth = 2; c.beginPath(); c.arc(ex, oy, R * (1.05 + p * 1.6), 0, 7); c.stroke(); }
+    // title
+    text(c, 'SpatialOS', ex, ey + u * 200, u * 64, win(t, 3.4, 5.2, 11, 12.2), 700);
+    text(c, 'version 2.0', ex, ey + u * 252, u * 26, 0.6 * win(t, 4.2, 5.8, 11, 12.2), 500);
+    // instructions
+    var a2 = win(t, 12.6, 14, 18.6, 19.6);
+    text(c, 'Put your phone', ex, ey + u * 30, u * 62, a2, 700); text(c, 'in your viewer', ex, ey + u * 100, u * 62, a2, 700);
+    text(c, 'Look straight ahead and relax', ex, ey + u * 168, u * 28, 0.7 * a2, 500);
+    // countdown
+    if (t > 17.2) { var n = Math.max(0, Math.ceil(BOOT_SECONDS - t)); text(c, 'Starting in ' + n, ex, ey + u * 250, u * 30, 0.8 * win(t, 17.2, 17.8, 19.4, 19.9), 500); }
+    // progress + status (small, bottom)
+    var by = ey + u * 300, bw = u * 340, bh = Math.max(3, u * 7);
+    var pa = win(t, 0.8, 2, 18.6, 19.5);
+    if (pa > 0.02) { c.save(); c.globalAlpha = pa; c.fillStyle = 'rgba(255,255,255,.16)'; c.fillRect(ex - bw / 2, by, bw, bh); c.fillStyle = '#6aa8ff'; c.fillRect(ex - bw / 2, by, bw * clamp(t / BOOT_SECONDS, 0, 1), bh); c.restore(); text(c, bootStatus, ex, by + u * 38, u * 24, 0.65 * pa, 500); }
+    if (bootWarn) text(c, bootWarn, ex, ey + u * 355, u * 22, 0.95 * win(t, 5, 6, 19, 19.8), 500, '#ffd60a');
+  }
+  function frame() {
+    var t = (performance.now() - t0) / 1000, c = cv.getContext('2d'), W = cv.width, H = cv.height;
+    c.setTransform(1, 0, 0, 1, 0, 0); c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
+    var sep = lensSepPx(), u = Math.min(W / 2, H) / 760, ey = H / 2 - u * 20;
+    if (bootFail) { var m = bootFail; [W / 2 - sep / 2, W / 2 + sep / 2].forEach(function (x) { text(c, 'Something went wrong', x, ey - u * 40, u * 44, 1, 700); text(c, String(m).slice(0, 60), x, ey + u * 20, u * 26, 0.8, 500, '#ffd60a'); text(c, 'Tap the screen to try again', x, ey + u * 80, u * 26, 0.7, 500); }); requestAnimationFrame(frame); return; }
+    var fade = 1 - ease((t - 19.2) / 0.8);
+    c.globalAlpha = fade; drawEye(c, W / 2 - sep / 2, ey, u, t, BOOT_SECONDS - t); drawEye(c, W / 2 + sep / 2, ey, u, t, BOOT_SECONDS - t); c.globalAlpha = 1;
+    if (t >= BOOT_SECONDS) {
+      if (ready && !started) { begin(); return; }
+      if (!ready) { [W / 2 - sep / 2, W / 2 + sep / 2].forEach(function (x) { text(c, bootStatus || 'Almost there…', x, ey, u * 30, 0.8, 500); }); }
+    }
+    requestAnimationFrame(frame);
+  }
+  var SOSref = null;
+  function begin() {
+    if (started) return; started = true;
+    try { SOSref.audio(); SOSref.start(); } catch (e) { console.error(e); }
+    var L = document.getElementById('loader'); L.classList.add('gone'); setTimeout(function () { L.style.display = 'none'; }, 700);
+    setTimeout(function () { lsSet('sos.run', 'ok'); }, 6000);
+  }
+  document.getElementById('loader').addEventListener('touchend', function (e) { if (bootFail) { e.preventDefault(); location.reload(); } }, { passive: false });
+  document.getElementById('loader').addEventListener('click', function () { if (bootFail) location.reload(); });
+  requestAnimationFrame(frame);
 
   // crash detection: 'boot' is cleared once the app has been running fine for a few seconds
   var crashed = lsGet('sos.run') === 'boot', handsCrashed = lsGet('sos.handsrun') === '1';
@@ -58,23 +122,20 @@
   function markOk() { lsSet('sos.run', 'ok'); }
   window.addEventListener('pagehide', markOk);
   document.addEventListener('visibilitychange', function () { if (document.hidden) markOk(); });
-
-  var started = false;
-  function fail(e) { status('Something went wrong', 1); all('.bar i', function (x) { x.style.background = '#ff453a'; }); warn(String(e && e.message || e)); sub('Tap the screen to try again'); document.getElementById('loader').onclick = function () { location.reload(); }; }
-  window.addEventListener('error', function (ev) { if (!started) fail(ev.message || 'Error'); });
+  window.addEventListener('error', function (ev) { if (!started) bootFail = ev.message || 'Error'; });
 
   (async function () {
     try {
       status('Loading 3D engine…', 0.08); await sleep(60);
       await loadScript('three.min.js');
       status('Loading interface…', 0.25); await sleep(40);
-      await loadScript('core.js'); await loadScript('apps.js'); await loadScript('apps2.js'); await loadScript('apps3.js'); await loadScript('handtrack.js');
-      var SOS = window.SOS, S = SOS.settings;
+      await loadScript('core.js'); await loadScript('apps.js'); await loadScript('apps2.js'); await loadScript('apps3.js'); await loadScript('apps4.js'); await loadScript('handtrack.js');
+      var SOS = window.SOS, S = SOS.settings; SOSref = SOS;
       if (crashed || handsCrashed) {
-        S.camera = false; if (crashed) S.resScale = Math.min(S.resScale, 0.65);
+        S.camera = false; if (crashed) S.resScale = Math.min(S.resScale, 0.6);
         if (handsCrashed) { S.hands = false; lsSet('sos.handsrun', '0'); }
         SOS.save();
-        warn(handsCrashed ? 'Hand tracking crashed the app last time, so it is switched off. Camera is off too.' : 'The app closed unexpectedly last time, so the camera is switched off. You can turn it back on in Settings.');
+        warn(handsCrashed ? 'Hand tracking crashed the app last time, so it is off.' : 'The app closed unexpectedly last time, so the camera is off.');
       }
       status('Preparing your space…', 0.5); await sleep(80);
       SOS.prepare();
@@ -83,26 +144,8 @@
         await Promise.race([SOS.enableCamera(), sleep(15000)]);
         if (S.hands && SOS.camState === 'on') { status('Loading hand tracking…', 0.82); await sleep(250); await Promise.race([SOS.startHands(), sleep(25000)]); }
       }
-      status('Ready', 1);
-      all('.status', function (e) { e.style.display = 'none'; }); all('.bar', function (e) { e.style.display = 'none'; });
-      all('.big', function (e) { e.style.display = 'block'; });
-
-      var left = 10, begun = false;
-      function begin() {
-        if (begun) return; begun = true; started = true; clearInterval(timer); clearInterval(poll);
-        SOS.audio();
-        SOS.start();
-        document.getElementById('loader').classList.add('gone');
-        setTimeout(function () { document.getElementById('loader').style.display = 'none'; }, 600);
-        setTimeout(markOk, 6000);
-      }
-      function tickSub() { sub('Starting in ' + left + ' · tap the screen to start now'); }
-      tickSub();
-      var timer = setInterval(function () { left--; if (left <= 0) begin(); else tickSub(); }, 1000);
-      var poll = setInterval(function () { try { if (window.NativeBridge && NativeBridge.takeClicks() > 0) begin(); } catch (e) {} }, 100);
-      document.getElementById('loader').addEventListener('touchend', function (e) { e.preventDefault(); begin(); }, { passive: false });
-      document.getElementById('loader').addEventListener('click', begin);
-    } catch (e) { fail(e); }
+      status('Ready', 1); ready = true;
+    } catch (e) { bootFail = String(e && e.message || e); }
   })();
 })();
 </script>

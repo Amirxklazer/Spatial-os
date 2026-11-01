@@ -5,11 +5,11 @@
   const SOS = (window.SOS = { apps: {}, wins: {}, hands: [], env: 'passthrough', videoReady: false, video: null, t: 0, fps: 60, zc: 1, vidAspect: 16 / 9, yawRaw: 0, pitchRaw: 0 });
 
   /* ---------- settings ---------- */
-  const DEF = { ipd: 63, lensSep: 62, fov: 82, distortion: true, lens: 0.5, resScale: 0.8, divider: true, winScale: 1, bright: 1, hands: false, palm: true, magnet: true, magnetT: 45, dwell: false, dwellT: 1.4, handCursor: false, volume: 0.7, sound: true, env: 'night', camera: false };
+  const DEF = { ipd: 63, lensSep: 62, fov: 82, distortion: true, lens: 0.4, resScale: 0.7, autoRes: true, comfort: true, predict: 30, camSync: 110, camZoom: 1, theme: 'liquid', spiral: true, divider: true, winScale: 1, bright: 1, hands: false, palm: true, magnet: true, magnetT: 45, dwell: false, dwellT: 1.4, handCursor: false, volume: 0.7, sound: true, env: 'night', camera: false };
   SOS.settings = Object.assign({}, DEF);
   try { Object.assign(SOS.settings, JSON.parse(localStorage.getItem('sos.settings') || '{}')); } catch (e) {}
   // v1.2 migration: hand tracking was the likely crash source, so it starts off again for everyone
-  try { if (localStorage.getItem('sos.v') !== '1.2') { SOS.settings.hands = false; SOS.settings.camera = false; localStorage.setItem('sos.v', '1.2'); } } catch (e) {}
+  try { if (localStorage.getItem('sos.v') !== '2.0') { SOS.settings.hands = false; SOS.settings.camera = false; SOS.settings.resScale = Math.min(SOS.settings.resScale, 0.7); SOS.settings.lens = 0.4; localStorage.setItem('sos.v', '2.0'); } } catch (e) {}
   SOS.save = function () { try { localStorage.setItem('sos.settings', JSON.stringify(SOS.settings)); } catch (e) {} };
   SOS.resetSettings = function () { Object.assign(SOS.settings, DEF); SOS.save(); SOS.applySettings(); };
 
@@ -61,12 +61,12 @@
   const bgMesh = new T.Mesh(new T.PlaneGeometry(2, 2), bgMat); bgMesh.frustumCulled = false; bgScene.add(bgMesh);
 
   const distMat = new T.ShaderMaterial({
-    uniforms: { tex: { value: null }, k1: { value: 0.2 }, k2: { value: 0.1 }, asp: { value: 1.1 }, on: { value: 1 }, zoom: { value: 0.86 }, cx: { value: new T.Vector2(0.25, 0.75) } },
+    uniforms: { tex: { value: null }, k1: { value: 0.2 }, k2: { value: 0.1 }, asp: { value: 1.1 }, on: { value: 1 }, zoom: { value: 0.86 }, cx: { value: new T.Vector2(0.25, 0.75) }, vig: { value: 0 } },
     vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.,1.); }',
-    fragmentShader: 'uniform sampler2D tex; uniform float k1,k2,asp,on,zoom; uniform vec2 cx; varying vec2 vUv;' +
+    fragmentShader: 'uniform sampler2D tex; uniform float k1,k2,asp,on,zoom; uniform vec2 cx; uniform float vig; varying vec2 vUv;' +
       'void main(){ float eye=step(0.5,vUv.x); vec2 e=vec2(vUv.x*2.-eye, vUv.y); vec2 c=e*2.-1.; c.x-=(mix(cx.x,cx.y,eye)-mix(.25,.75,eye))*4.; vec2 q=vec2(c.x*asp,c.y);' +
       ' float r2=dot(q,q)/(asp*asp+1.); float f= on>.5 ? (1.+k1*r2+k2*r2*r2)*zoom : 1.; q*=f; vec2 s=vec2(q.x/asp,q.y)*.5+.5;' +
-      ' if(s.x<0.||s.x>1.||s.y<0.||s.y>1.){ gl_FragColor=vec4(0.,0.,0.,1.); return; } s.x=(s.x+eye)*.5; gl_FragColor=vec4(texture2D(tex,s).rgb,1.); }',
+      ' if(s.x<0.||s.x>1.||s.y<0.||s.y>1.){ gl_FragColor=vec4(0.,0.,0.,1.); return; } s.x=(s.x+eye)*.5; float rr=length(vec2(c.x*.8,c.y)); float vv=1.-vig*smoothstep(.45,1.15,rr); gl_FragColor=vec4(texture2D(tex,s).rgb*vv,1.); }',
     depthTest: false, depthWrite: false
   });
   const distMesh = new T.Mesh(new T.PlaneGeometry(2, 2), distMat); distMesh.frustumCulled = false; distScene.add(distMesh);
@@ -74,7 +74,8 @@
   let W = 0, H = 0, rt = null, eyeAsp = 1;
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
-    const cw = Math.max(64, Math.round(innerWidth * dpr)), ch = Math.max(64, Math.round(innerHeight * dpr));
+    let cw = Math.max(64, Math.round(innerWidth * dpr)), ch = Math.max(64, Math.round(innerHeight * dpr));
+    if (cw > 1440) { ch = Math.round(ch * 1440 / cw); cw = 1440; } // a phone GPU cannot push native 1080p stereo with distortion smoothly: this is the main cause of dizziness
     renderer.setSize(cw, ch, false);
     W = Math.max(64, Math.round(cw * SOS.settings.resScale)); H = Math.max(64, Math.round(ch * SOS.settings.resScale));
     if (rt) rt.dispose();
@@ -103,8 +104,8 @@
   let vtex = null;
   // camera uv (0..1, y down) -> eye-normalised coords (0..1, y down) given cover-fit
   SOS.camToEye = function (u, v) {
-    const va = SOS.vidAspect, ea = eyeAsp;
-    const sx = Math.min(1, ea / va), sy = Math.min(1, va / ea);
+    const va = SOS.vidAspect, ea = eyeAsp, k = SOS.camK || 1;
+    const sx = Math.min(1, ea / va) * k, sy = Math.min(1, va / ea) * k;
     return [(u - 0.5) / sx + 0.5, (v - 0.5) / sy + 0.5];
   };
   function updateBg() {
@@ -113,7 +114,14 @@
     SOS.videoReady = ready;
     if (ready) SOS.vidAspect = v.videoWidth / v.videoHeight;
     const va = SOS.vidAspect, ea = eyeAsp;
-    bgMat.uniforms.uvS.value.set(Math.min(1, ea / va), Math.min(1, va / ea));
+    // show only the part of the camera picture that matches the headset's field of view, so things look their real size
+    let k = 1;
+    if (ready && SOS.camHFov > 10) {
+      const vf = 2 * Math.atan(Math.tan(SOS.camHFov * Math.PI / 360) / va);
+      k = clamp(Math.tan(SOS.settings.fov * Math.PI / 360) / Math.tan(vf / 2) * (SOS.settings.camZoom || 1), 0.2, 1);
+    }
+    SOS.camK = k;
+    bgMat.uniforms.uvS.value.set(Math.min(1, ea / va) * k, Math.min(1, va / ea) * k);
     bgMat.uniforms.has.value = ready ? 1 : 0;
   }
 
@@ -177,6 +185,38 @@
   let yawOff = 0, mouseYaw = 0, mousePitch = 0;
   const tmpM = new T.Matrix4(), tmpV = new T.Vector3();
   const hasNative = typeof window.NativeBridge !== 'undefined' && window.NativeBridge && typeof window.NativeBridge.pose === 'function';
+  // ---- comfort: angular-velocity prediction (cuts perceived lag), camera-sync delay, comfort vignette ----
+  const hist = [], pq = new T.Quaternion(), dq = new T.Quaternion(), exq = new T.Quaternion(), axv = new T.Vector3(), omega = new T.Vector3();
+  let lastRaw = null, lastRawT = 0, speed = 0, vigNow = 0, rawLive = new T.Quaternion();
+  function poseFilter() {
+    const now = performance.now(), S = SOS.settings;
+    rawLive.copy(rawQ);
+    if (lastRaw) {
+      const dt = Math.max(0.004, (now - lastRawT) / 1000);
+      dq.copy(lastRaw).invert().multiply(rawQ);            // rotation since last frame, in head frame
+      if (dq.w < 0) { dq.x = -dq.x; dq.y = -dq.y; dq.z = -dq.z; dq.w = -dq.w; }
+      const ang = 2 * Math.acos(clamp(dq.w, -1, 1)), s = Math.sqrt(Math.max(1e-9, 1 - dq.w * dq.w));
+      axv.set(dq.x / s, dq.y / s, dq.z / s).multiplyScalar(ang / dt);
+      if (!isFinite(axv.x + axv.y + axv.z)) axv.set(0, 0, 0);
+      omega.lerp(axv, 0.35);                               // smoothed angular velocity (rad/s)
+      speed += (omega.length() - speed) * 0.2;
+    }
+    lastRaw = (lastRaw || new T.Quaternion()).copy(rawQ); lastRawT = now;
+    hist.push({ t: now, q: rawQ.clone() }); while (hist.length > 40) hist.shift();
+    const cam = SOS.camState === 'on' && SOS.env === 'passthrough' && SOS.videoReady;
+    if (cam && S.camSync > 0) {
+      // windows must stay glued to the (delayed) camera picture, so draw them with the head pose from camSync ms ago
+      const tt = now - S.camSync; let a = null, b = null;
+      for (let i = hist.length - 1; i >= 0; i--) { if (hist[i].t <= tt) { a = hist[i]; b = hist[i + 1] || null; break; } }
+      if (a) { rawQ.copy(a.q); if (b && b.t > a.t) rawQ.slerp(b.q, clamp((tt - a.t) / (b.t - a.t), 0, 1)); }
+      else rawQ.copy(hist[0].q);
+    } else if (S.predict > 0 && omega.length() > 0.02) {
+      const ang = Math.min(omega.length() * S.predict / 1000, 0.12); axv.copy(omega).normalize();
+      exq.setFromAxisAngle(axv, ang); rawQ.multiply(exq);   // look slightly ahead: pose is a little old by the time it is on screen
+    }
+    const target = S.comfort ? clamp((speed - 0.9) / 2.2, 0, 1) * 0.75 : 0;
+    vigNow += (target - vigNow) * 0.15; distMat.uniforms.vig.value = vigNow;
+  }
   function updatePose() {
     if (hasNative) {
       let s = ''; try { s = window.NativeBridge.pose(); } catch (e) {}
@@ -192,6 +232,7 @@
     } else {
       rawQ.setFromEuler(new T.Euler(mousePitch, mouseYaw, 0, 'YXZ'));
     }
+    poseFilter();
     tmpV.set(0, 0, -1).applyQuaternion(rawQ);
     SOS.yawRaw = Math.atan2(-tmpV.x, -tmpV.z); SOS.pitchRaw = Math.asin(clamp(tmpV.y, -1, 1));
     yawOffQ.setFromAxisAngle(new T.Vector3(0, 1, 0), yawOff);
@@ -277,13 +318,29 @@
   }
   SOS.Win = Win;
 
+  /* ---------- liquid glass + themes ---------- */
+  const THEMES = {
+    liquid:   { name: 'Liquid',   base: 'rgba(28,36,58,.44)', a: 'rgba(170,205,255,.18)', b: 'rgba(120,150,255,.05)', glow: 'rgba(190,215,255,.10)' },
+    aurora:   { name: 'Aurora',   base: 'rgba(16,32,48,.48)', a: 'rgba(90,245,205,.20)',  b: 'rgba(160,100,255,.10)', glow: 'rgba(120,255,220,.10)' },
+    sunset:   { name: 'Sunset',   base: 'rgba(52,26,38,.48)', a: 'rgba(255,175,110,.22)', b: 'rgba(255,90,150,.10)',  glow: 'rgba(255,170,120,.10)' },
+    mint:     { name: 'Mint',     base: 'rgba(22,44,38,.48)', a: 'rgba(130,255,190,.20)', b: 'rgba(60,200,160,.08)',  glow: 'rgba(150,255,200,.10)' },
+    midnight: { name: 'Midnight', base: 'rgba(8,10,20,.84)',  a: 'rgba(90,110,255,.12)',  b: 'rgba(0,0,0,0)',         glow: 'rgba(110,130,255,.08)' },
+    graphite: { name: 'Graphite', base: 'rgba(50,51,58,.88)', a: 'rgba(255,255,255,.07)', b: 'rgba(255,255,255,0)',   glow: 'rgba(255,255,255,.05)' }
+  };
+  SOS.THEMES = THEMES;
+  SOS.redrawAll = function () { for (const k in SOS.wins) SOS.wins[k].dirty = true; };
   SOS.glass = function (c, x, y, w, h, r) {
-    c.save();
-    rr(c, x, y, w, h, r);
-    const g = c.createLinearGradient(0, y, 0, y + h); g.addColorStop(0, 'rgba(66,68,76,.82)'); g.addColorStop(1, 'rgba(40,41,48,.82)');
-    c.fillStyle = g; c.fill();
-    c.lineWidth = 2; c.strokeStyle = 'rgba(255,255,255,.16)'; rr(c, x + 1, y + 1, w - 2, h - 2, r); c.stroke();
-    const s = c.createLinearGradient(x, y, x + w, y + h * 0.6); s.addColorStop(0, 'rgba(255,255,255,.10)'); s.addColorStop(0.5, 'rgba(255,255,255,0)'); rr(c, x, y, w, h, r); c.fillStyle = s; c.fill();
+    const th = THEMES[SOS.settings.theme] || THEMES.liquid;
+    c.save(); rr(c, x, y, w, h, r); c.fillStyle = th.base; c.fill(); c.clip();
+    let g = c.createLinearGradient(x, y, x + w * 0.45, y + h); g.addColorStop(0, th.a); g.addColorStop(1, th.b); c.fillStyle = g; c.fillRect(x, y, w, h);
+    g = c.createLinearGradient(0, y, 0, y + h * 0.55); g.addColorStop(0, 'rgba(255,255,255,.15)'); g.addColorStop(1, 'rgba(255,255,255,0)'); c.fillStyle = g; c.fillRect(x, y, w, h * 0.55);
+    const sx = x + w * 0.12, sy = y + h * 0.05, rg = c.createRadialGradient(sx, sy, 0, sx, sy, Math.max(w, h) * 0.55); rg.addColorStop(0, 'rgba(255,255,255,.28)'); rg.addColorStop(1, 'rgba(255,255,255,0)'); c.fillStyle = rg; c.fillRect(x, y, w, h);
+    g = c.createLinearGradient(0, y + h * 0.7, 0, y + h); g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(1, th.glow); c.fillStyle = g; c.fillRect(x, y, w, h);
+    c.restore();
+    c.save(); const rm = c.createLinearGradient(x, y, x + w, y + h);
+    rm.addColorStop(0, 'rgba(255,255,255,.85)'); rm.addColorStop(0.25, 'rgba(255,255,255,.18)'); rm.addColorStop(0.62, 'rgba(255,255,255,.10)'); rm.addColorStop(1, 'rgba(255,255,255,.55)');
+    c.lineWidth = 2.6; c.strokeStyle = rm; rr(c, x + 1.3, y + 1.3, w - 2.6, h - 2.6, r); c.stroke();
+    c.lineWidth = 1; c.strokeStyle = 'rgba(255,255,255,.07)'; rr(c, x + 5, y + 5, w - 10, h - 10, Math.max(4, r - 4)); c.stroke();
     c.restore();
   };
 
@@ -314,6 +371,7 @@
       this.hit(id, x, y, w, h, { onClick: o.onClick, noDwell: o.noDwell });
       const base = o.fill || 'rgba(255,255,255,0.08)';
       this.rect(x, y, w, h, r, dn ? (o.downFill || 'rgba(255,255,255,0.3)') : hv ? (o.hoverFill || 'rgba(255,255,255,0.2)') : base);
+      if (h >= 36) { const c = this.c; c.save(); rr(c, x, y, w, h, r); c.clip(); const gg = c.createLinearGradient(0, y, 0, y + h); gg.addColorStop(0, 'rgba(255,255,255,.20)'); gg.addColorStop(0.5, 'rgba(255,255,255,.03)'); gg.addColorStop(1, 'rgba(255,255,255,0)'); c.fillStyle = gg; c.fillRect(x, y, w, h); c.restore(); this.rect(x + 0.75, y + 0.75, w - 1.5, h - 1.5, r, null, 'rgba(255,255,255,.26)', 1.5); }
       if (o.label) this.text(o.label, x + w / 2, y + h / 2 + 1, { size: o.size || 28, align: 'center', weight: o.weight || 600, color: o.color || '#fff' });
       if (o.draw) o.draw(this.c, x, y, w, h, hv, dn);
       return hv;
@@ -626,11 +684,19 @@
     renderer.render(distScene, distCam);
   }
 
-  let last = performance.now(), fAcc = 0, fN = 0;
+  let last = performance.now(), fAcc = 0, fN = 0, lowN = 0, hiN = 0; SOS.resCeil = 0.8; SOS.paused = false;
   function loop(now) {
     requestAnimationFrame(loop);
     const dt = Math.min(0.1, (now - last) / 1000); last = now;
-    fAcc += dt; fN++; if (fAcc > 1) { SOS.fps = Math.round(fN / fAcc); fAcc = 0; fN = 0; }
+    fAcc += dt; fN++;
+    if (fAcc > 1) {
+      SOS.fps = Math.round(fN / fAcc); fAcc = 0; fN = 0;
+      const S = SOS.settings; lowN = SOS.fps < 48 ? lowN + 1 : 0; hiN = SOS.fps >= 57 ? hiN + 1 : 0;
+      if (S.autoRes && !SOS.paused) {
+        if (lowN >= 2 && S.resScale > 0.42) { S.resScale = Math.round((S.resScale - 0.07) * 100) / 100; resize(); lowN = 0; SOS.autoResNote = true; }
+        else if (hiN >= 8 && S.resScale < SOS.resCeil) { S.resScale = Math.round((S.resScale + 0.04) * 100) / 100; resize(); hiN = 0; }
+      }
+    }
     try { update(dt); render(); } catch (e) { console.error('frame', e); }
   }
 
@@ -718,11 +784,12 @@
         camNative = true; camCv._ok = false; camCv.readyState = 0; camSeqSeen = -1;
         if (!window.NativeBridge.startCamera()) throw new Error('native camera: ' + window.NativeBridge.camStatus());
         SOS.camState = 'on';
-        for (let i = 0; i < 100 && window.NativeBridge.camStatus() === 'starting'; i++) await new Promise(function (r) { setTimeout(r, 50); });
+        for (let i = 0; i < 160 && window.NativeBridge.camStatus() === 'starting'; i++) await new Promise(function (r) { setTimeout(r, 50); });
         if (window.NativeBridge.camStatus() !== 'on') throw new Error(window.NativeBridge.camStatus());
+        try { SOS.camHFov = window.NativeBridge.camFov(); } catch (e) { SOS.camHFov = 0; }
         SOS.attachVideo(camCv);
         try { SOS.stream = camCv.captureStream(24); } catch (e) { SOS.stream = null; }
-        clearInterval(camTimer); camTimer = setInterval(camPump, 40);
+        clearInterval(camTimer); camTimer = setInterval(camPump, 16);
       } else {
         const video = document.getElementById('cam');
         const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 24, max: 30 } }, audio: false });
@@ -750,6 +817,60 @@
     if (SOS.stopHands) SOS.stopHands();
     if (SOS.env === 'passthrough') SOS.setEnv('night');
   };
+  /* ---------- voice (Android speech recognizer) + Spiral commands ---------- */
+  SOS.listening = false; SOS.voicePartial = ''; SOS.voiceMode = 'type';
+  SOS.onMicPerm = function (ok) { const r = SOS._micRes; SOS._micRes = null; if (r) r(!!ok); };
+  SOS.startVoice = async function (mode) {
+    const nb = window.NativeBridge;
+    if (!nb || typeof nb.startVoice !== 'function') { SOS.toast('Voice needs the Android app.', 3); return false; }
+    if (SOS.listening) { try { nb.stopVoice(); } catch (e) {} return true; }
+    SOS.voiceMode = mode || 'type';
+    try {
+      if (!nb.hasMicPermission()) {
+        const ok = await new Promise(function (res) { SOS._micRes = res; nb.requestMicPermission(); setTimeout(function () { if (SOS._micRes === res) { SOS._micRes = null; res(false); } }, 60000); });
+        if (!ok) { SOS.toast('Microphone is blocked. Android Settings > Apps > SpatialOS > Permissions > Microphone.', 6); return false; }
+      }
+      SOS.listening = true; SOS.voicePartial = ''; SOS.redrawVoice(); nb.startVoice(); return true;
+    } catch (e) { SOS.listening = false; return false; }
+  };
+  SOS.redrawVoice = function () { ['keyboard', 'spiral', 'browser'].forEach(function (k) { if (SOS.wins[k]) SOS.wins[k].dirty = true; }); };
+  SOS.onVoiceState = function (s) { SOS.listening = s === 'listening' || s === 'thinking'; SOS.voiceState = s; SOS.redrawVoice(); };
+  SOS.typeText = function (t) { for (const ch of String(t)) SOS.typeKey(ch); };
+  SOS.onVoice = function (text, fin, err) {
+    if (!fin) { SOS.voicePartial = text; SOS.redrawVoice(); return; }
+    SOS.listening = false; SOS.voicePartial = ''; SOS.voiceState = ''; SOS.redrawVoice();
+    if (err) { SOS.toast(err === 'unavailable' ? 'No speech service on this phone.' : err === 'error 7' ? 'I did not catch that.' : err === 'error 9' ? 'Allow the microphone first.' : 'Voice did not work (' + err + ').', 3); return; }
+    if (!text) { SOS.toast('I did not catch that.', 2.5); return; }
+    if (SOS.voiceAfter) { const f = SOS.voiceAfter; SOS.voiceAfter = null; f(text); } else if (SOS.voiceMode === 'command') SOS.runCommand(text); else if (SOS.kbFor) SOS.typeText(text); else SOS.runCommand(text);
+  };
+  SOS.topWindow = function () { let best = null; for (const k in SOS.wins) { const w = SOS.wins[k]; if (['dock', 'toast', 'keyboard', 'spiral', 'home'].indexOf(k) >= 0 || w.closing) continue; if (!best || w.z > best.z) best = w; } return best; };
+  SOS.runCommand = function (raw) {
+    const t = String(raw).toLowerCase().replace(/[.,!?]/g, '').trim(), L = SOS.LABELS || {};
+    const alias = { browser: 'browser', safari: 'browser', web: 'browser', internet: 'browser', camera: 'camera', photos: 'gallery', gallery: 'gallery', pictures: 'gallery', settings: 'settings', store: 'store', 'app store': 'store', notes: 'notes', music: 'music', calculator: 'calc', clock: 'clock', timer: 'timer', sketch: 'sketch', draw: 'sketch', breathe: 'breathe', compass: 'compass', snake: 'snake', pong: 'pong', memory: 'memory', '2048': 'g2048', dice: 'dice', converter: 'convert' };
+    let m;
+    if ((m = t.match(/^(?:search|google|look up|search for)\s+(.+)$/))) { SOS.open('browser'); setTimeout(function () { if (SOS.apps.browser && SOS.apps.browser.search) SOS.apps.browser.search(m[1]); }, 300); return; }
+    if ((m = t.match(/^(?:open|launch|start|show|go to)\s+(?:the\s+)?(.+)$/))) { const id = alias[m[1]]; if (id && SOS.apps[id]) { if (SOS.isInstalled && !SOS.isInstalled(id)) { SOS.toast((L[id] || id) + ' is not installed. Get it in the Store.', 3.5); return; } SOS.open(id, { bring: true }); SOS.close('home'); return; } }
+    if (/^(go )?home$|home screen/.test(t)) { SOS.toggleHome(); return; }
+    if (/recenter|come here|bring (it|them|everything)|center/.test(t)) { SOS.recenterAll(); SOS.toast('Brought everything to you.', 2); return; }
+    if (/^close/.test(t)) { const w = SOS.topWindow(); if (w) SOS.close(w.id); return; }
+    if (/(take|snap).*(photo|picture|pic|selfie)/.test(t)) { SOS.open('camera', { bring: true }); setTimeout(function () { if (SOS.apps.camera && SOS.apps.camera.shoot) SOS.apps.camera.shoot(); }, 700); return; }
+    if (/camera on|turn on (the )?camera|passthrough on|show (me )?(the )?room/.test(t)) { SOS.enableCamera(); return; }
+    if (/camera off|turn off (the )?camera|passthrough off/.test(t)) { SOS.disableCamera(); return; }
+    if ((m = t.match(/(?:theme|style)\s+(\w+)/)) && SOS.THEMES[m[1]]) { SOS.settings.theme = m[1]; SOS.save(); SOS.redrawAll(); return; }
+    if (/what time|the time/.test(t)) { const d = new Date(); SOS.toast('It is ' + d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0'), 3); return; }
+    if (/brighter|darker/.test(t)) { SOS.settings.bright = Math.max(0.5, Math.min(1.6, SOS.settings.bright + (/brighter/.test(t) ? 0.15 : -0.15))); SOS.save(); return; }
+    SOS.toast('I heard: "' + raw + '"', 3.5);
+  };
+
+  // bring every window to where you are now, keeping their layout (Home, apps, keyboard, dock)
+  SOS.recenterAll = function () {
+    SOS.recenter();
+    const ws = []; for (const k in SOS.wins) { if (k !== 'dock' && k !== 'toast' && k !== 'spiral' && !SOS.wins[k].closing) ws.push(SOS.wins[k]); }
+    const ref = SOS.wins.home || ws.slice().sort(function (a, b) { return b.z - a.z; })[0];
+    if (ref) { let d = (ref.id === 'home' ? 0.3 : 0) - ref.yaw; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; ws.forEach(function (w) { w.yaw += d; w.place(); }); }
+    const dk = SOS.wins.dock; if (dk) { dk.yaw = 0; dk.pitch = -0.85; dk.place(); }
+    SOS.redrawAll();
+  };
   SOS.toast = function (msg, secs) { if (SOS.apps.toast) SOS.apps.toast.show(msg, secs || 3.5); };
 
   /* ---------- boot: prepare (behind the loading screen) then start ---------- */
@@ -763,6 +884,7 @@
     SOS.recenter();
     SOS.open('home', { exact: true, yaw: 0.3, pitch: 0.0, dist: 2.4 });
     SOS.open('dock', { exact: true, yaw: 0, pitch: -0.85, dist: 2.0 });
+    if (SOS.settings.spiral !== false && SOS.apps.spiral) SOS.open('spiral', { exact: true, yaw: -0.42, pitch: -0.3, dist: 1.5 });
     last = performance.now(); requestAnimationFrame(loop);
   };
   function applySettingsNative() { try { if (hasNative) window.NativeBridge.setMagnetThreshold(SOS.settings.magnetT); } catch (e) {} }

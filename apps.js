@@ -69,10 +69,13 @@
   SOS.LABELS = LABELS;
 
   /* ---------- installed apps (App Store) ---------- */
-  const SYSTEM = ['camera', 'gallery', 'store', 'settings', 'env'];
-  const CATALOG = [['notes', 'Notes', 'Quick text notes'], ['music', 'Music', 'Ambient synth'], ['sketch', 'Sketch', 'Draw in the air'], ['calc', 'Calculator', 'Simple maths'], ['clock', 'Clock', 'Time and world clocks'], ['breathe', 'Breathe', 'Slow down'], ['compass', 'Compass', 'Find your way'], ['timer', 'Timer', 'Countdown with alarm'], ['ttt', 'Tic-Tac-Toe', 'Beat the computer'], ['memory', 'Memory', 'Match the pairs'], ['g2048', '2048', 'Slide and merge']];
+  const SYSTEM = ['browser', 'camera', 'gallery', 'store', 'settings', 'env'];
+  const CATALOG = [['notes', 'Notes', 'Quick text notes', 'Tools'], ['calc', 'Calculator', 'Simple maths', 'Tools'], ['clock', 'Clock', 'Time and world clocks', 'Tools'], ['timer', 'Timer', 'Countdown with alarm', 'Tools'], ['convert', 'Converter', 'Length, weight, temperature', 'Tools'], ['compass', 'Compass', 'Find your way', 'Tools'],
+    ['sketch', 'Sketch', 'Draw in the air', 'Create'], ['music', 'Music', 'Ambient synth', 'Create'], ['breathe', 'Breathe', 'Slow down', 'Create'],
+    ['ttt', 'Tic-Tac-Toe', 'Beat the computer', 'Games'], ['memory', 'Memory', 'Match the pairs', 'Games'], ['g2048', '2048', 'Slide and merge', 'Games'], ['snake', 'Snake', 'Eat and grow', 'Games'], ['pong', 'Pong', 'Look to play', 'Games'], ['dice', 'Dice', 'Roll one or two', 'Games']];
   let INST = null; try { INST = JSON.parse(localStorage.getItem('sos.apps') || 'null'); } catch (e) {}
   if (!Array.isArray(INST)) INST = ['notes', 'music', 'sketch', 'calc', 'clock', 'breathe', 'compass'];
+  if (INST.indexOf('browser') >= 0) INST = INST.filter(function (x) { return x !== 'browser'; });
   const saveInst = function () { try { localStorage.setItem('sos.apps', JSON.stringify(INST)); } catch (e) {} };
   SOS.CATALOG = CATALOG;
   SOS.isInstalled = function (id) { return SYSTEM.indexOf(id) >= 0 || INST.indexOf(id) >= 0; };
@@ -114,7 +117,7 @@
     draw(ui, win) {
       const c = ui.c, items = [
         ['home', 'Home', function () { SOS.toggleHome(); }, false],
-        ['target', 'Recenter', function () { SOS.recenter(); const hp = { yaw: 0, pitch: 0 }; for (const k in SOS.wins) { const w = SOS.wins[k]; if (k === 'dock') continue; w.yaw = 0; w.pitch = k === 'keyboard' ? -0.5 : 0.02; w.place(); } }, false],
+        ['target', 'Recenter', function () { SOS.recenterAll(); }, false],
         ['env', 'Space', function () { SOS.setEnv(ENVS[(ENVS.indexOf(SOS.env) + 1) % ENVS.length]); win.dirty = true; }, false],
         ['hand', 'Hands', function () { if (SOS.camState !== 'on') { SOS.toast('Turn the camera on first: Settings > Passthrough.', 4); return; } set('hands', !S.hands); if (S.hands) SOS.startHands(); else SOS.stopHands(); win.dirty = true; }, S.hands && SOS.camState === 'on'],
         ['settings', 'Settings', function () { SOS.open('settings'); }, false]
@@ -131,17 +134,17 @@
   });
 
   /* ---------- Keyboard ---------- */
-  const KB_ROWS = [['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'], ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'], ['SHIFT', 'z', 'x', 'c', 'v', 'b', 'n', 'm', 'Backspace'], ['SYM', ' ', 'Enter']];
-  const KB_SYM = [['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'], ['-', '/', ':', ';', '(', ')', '$', '&', '@'], ['SHIFT', '.', ',', '?', '!', '\'', '"', '#', 'Backspace'], ['SYM', ' ', 'Enter']];
+  const KB_ROWS = [['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'], ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'], ['SHIFT', 'z', 'x', 'c', 'v', 'b', 'n', 'm', 'Backspace'], ['SYM', ' ', 'MIC', 'Enter']];
+  const KB_SYM = [['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'], ['-', '/', ':', ';', '(', ')', '$', '&', '@'], ['SHIFT', '.', ',', '?', '!', '\'', '"', '#', 'Backspace'], ['SYM', ' ', 'MIC', 'Enter']];
   reg({
     id: 'keyboard', w: 1100, h: 400, chrome: false, radius: 44, dist: 1.7, tilt: -0.28,
     create(win) { win.state = { shift: false, sym: false, flash: null }; },
     draw(ui, win) {
       const st = win.state, c = ui.c, rows = st.sym ? KB_SYM : KB_ROWS, kh = 74, gap = 10, ky = 46;
-      ui.text(SOS.kbFor ? (SOS.kbFor.app.title || 'Typing') : 'Keyboard', 550, 22, { size: 20, align: 'center', color: WHITE2, weight: 600 });
+      ui.text(SOS.listening ? ('Listening… ' + (SOS.voicePartial || '')) : (SOS.kbFor ? (SOS.kbFor.app.title || 'Typing') : 'Keyboard'), 550, 22, { size: 20, align: 'center', color: WHITE2, weight: 600 });
       rows.forEach(function (row, ri) {
         const base = 84, wide = 132;
-        const widths = row.map(function (k) { return k === 'SHIFT' || k === 'Backspace' ? wide : k === ' ' ? 560 : k === 'Enter' ? 200 : k === 'SYM' ? 160 : base; });
+        const widths = row.map(function (k) { return k === 'SHIFT' || k === 'Backspace' ? wide : k === ' ' ? 440 : k === 'Enter' ? 200 : k === 'SYM' ? 160 : k === 'MIC' ? 130 : base; });
         const tw = widths.reduce(function (a, b) { return a + b; }, 0) + gap * (row.length - 1);
         let x = (1100 - tw) / 2; const y = ky + ri * (kh + gap);
         row.forEach(function (k, i) {
@@ -149,13 +152,16 @@
           const special = k.length > 1 && k !== ' ';
           ui.hit(id, x, y, w, kh, { onClick: function () {
             st.flash = { k: k, t: SOS.t };
-            if (k === 'SHIFT') st.shift = !st.shift; else if (k === 'SYM') st.sym = !st.sym;
+            if (k === 'SHIFT') st.shift = !st.shift; else if (k === 'SYM') st.sym = !st.sym; else if (k === 'MIC') SOS.startVoice('type');
             else { const out = (k.length === 1 && st.shift && !st.sym) ? k.toUpperCase() : k; SOS.typeKey(out); if (st.shift && k.length === 1) st.shift = false; }
             win.dirty = true;
           } });
-          ui.rect(x, y, w, kh, 16, fl ? 'rgba(255,255,255,.7)' : hv ? 'rgba(255,255,255,.34)' : special ? 'rgba(255,255,255,.12)' : 'rgba(255,255,255,.2)');
+          ui.rect(x, y, w, kh, 22, fl ? 'rgba(255,255,255,.7)' : hv ? 'rgba(255,255,255,.34)' : special ? 'rgba(255,255,255,.12)' : 'rgba(255,255,255,.2)', 'rgba(255,255,255,.22)', 1.5);
           let lab = k === 'Backspace' ? '⌫' : k === 'SHIFT' ? (st.shift ? '⇧•' : '⇧') : k === 'SYM' ? (st.sym ? 'ABC' : '123') : k === 'Enter' ? 'return' : k === ' ' ? 'space' : (st.shift && !st.sym ? k.toUpperCase() : k);
-          ui.text(lab, x + w / 2, y + kh / 2 + 1, { size: special || k === ' ' ? 26 : 34, align: 'center', weight: 600, color: fl ? '#111' : '#fff' });
+          if (k === 'MIC') {
+            const mx = x + w / 2, my = y + kh / 2, on = SOS.listening; c.save(); c.strokeStyle = on ? '#ff453a' : '#fff'; c.fillStyle = on ? '#ff453a' : '#fff'; c.lineWidth = 3.4; c.lineCap = 'round';
+            rr(c, mx - 8, my - 22, 16, 30, 8); c.fill(); c.beginPath(); c.arc(mx, my - 4, 17, 0.15 * Math.PI, 0.85 * Math.PI); c.stroke(); c.beginPath(); c.moveTo(mx, my + 13); c.lineTo(mx, my + 24); c.stroke(); c.restore();
+          } else ui.text(lab, x + w / 2, y + kh / 2 + 1, { size: special || k === ' ' ? 26 : 34, align: 'center', weight: 600, color: fl ? '#111' : '#fff' });
           x += w + gap;
         });
       });
@@ -164,7 +170,7 @@
   });
 
   /* ---------- Settings ---------- */
-  const SET_PANES = [['general', 'General', '#8e8e93'], ['display', 'Display', '#0a84ff'], ['passthrough', 'Passthrough', '#30d158'], ['input', 'Input', '#ff9f0a'], ['sound', 'Sound', '#ff375f'], ['about', 'About', '#64d2ff']];
+  const SET_PANES = [['general', 'General', '#8e8e93'], ['display', 'Display', '#0a84ff'], ['look', 'Appearance', '#bf5af2'], ['passthrough', 'Passthrough', '#30d158'], ['input', 'Input', '#ff9f0a'], ['sound', 'Sound', '#ff375f'], ['about', 'About', '#64d2ff']];
   reg({
     id: 'settings', title: 'Settings', w: 1160, h: 720,
     create(win) { win.state = { pane: 'general' }; },
@@ -207,15 +213,20 @@
     const t = function (label, k, extra) { return { type: 'toggle', label: label, value: S[k], set: function () { set(k, !S[k]); if (extra) extra(); win.dirty = true; } }; };
     const sl = function (label, k, min, max, step, fmt, extra) { return { type: 'slider', label: label, value: S[k], min: min, max: max, step: step, fmt: fmt, set: function (v) { set(k, v); if (extra) extra(); win.dirty = true; } }; };
     const head = function (l) { return { type: 'head', label: l, h: 56 }; };
-    if (pane === 'general') return [head('SPACE'), { type: 'button', label: 'Recenter view', note: 'Face forward, then tap', onClick: function () { SOS.recenter(); } }, { type: 'button', label: 'Open Home', onClick: function () { SOS.toggleHome(); } },
+    if (pane === 'general') return [head('SPACE'), t('Spiral assistant orb', 'spiral', function () { if (S.spiral) SOS.open('spiral', { exact: true, yaw: -0.42, pitch: -0.3, dist: 1.5 }); else SOS.close('spiral'); }), { type: 'button', label: 'Recenter view', note: 'Brings every app to you', onClick: function () { SOS.recenterAll(); } }, { type: 'button', label: 'Open Home', onClick: function () { SOS.toggleHome(); } },
       head('SYSTEM'), { type: 'button', label: 'Restore default settings', onClick: function () { SOS.resetSettings(); SOS.setEnv('passthrough'); SOS.setResScale(); win.dirty = true; } }, { type: 'button', label: 'Shut Down', color: '#ff453a', onClick: function () { SOS.quit(); } }];
     if (pane === 'display') return [head('LENSES'), sl('Eye distance', 'ipd', 54, 74, 1, function (v) { return v + ' mm'; }), sl('Lens spacing (fixes double view)', 'lensSep', 50, 76, 1, function (v) { return v + ' mm'; }), sl('Field of view', 'fov', 60, 100, 1, function (v) { return v + '°'; }), t('Lens distortion correction', 'distortion'), sl('Lens strength', 'lens', 0, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }),
-      head('DISPLAY'), sl('Render quality', 'resScale', 0.5, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }, function () { SOS.setResScale(); }), t('Centre divider', 'divider'), sl('Window size', 'winScale', 0.7, 1.4, 0.05, function (v) { return Math.round(v * 100) + '%'; })];
+      head('COMFORT'), t('Comfort vignette while turning', 'comfort'), t('Auto quality (keeps it smooth)', 'autoRes'), sl('Look-ahead (less lag)', 'predict', 0, 60, 5, function (v) { return v + ' ms'; }), { type: 'info', label: 'Frame rate', value: SOS.fps + ' fps' },
+      head('DISPLAY'), sl('Render quality', 'resScale', 0.4, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }, function () { SOS.setResScale(); }), t('Centre divider', 'divider'), sl('Window size', 'winScale', 0.7, 1.4, 0.05, function (v) { return Math.round(v * 100) + '%'; })];
+    if (pane === 'look') {
+      const th = function (opts) { return { type: 'choice', label: 'Theme', value: S.theme, opts: opts, set: function (v) { set('theme', v); SOS.redrawAll(); }, h: 130 }; };
+      return [head('GLASS THEME'), th([['liquid', 'Liquid'], ['aurora', 'Aurora'], ['sunset', 'Sunset']]), th([['mint', 'Mint'], ['midnight', 'Midnight'], ['graphite', 'Graphite']]), { type: 'info', label: 'Tip', value: 'Midnight and Graphite are the most solid' }];
+    }
     if (pane === 'passthrough') {
       const cs = SOS.camState, csTxt = cs === 'on' ? 'Live' : cs === 'asking' ? 'Asking for permission…' : cs === 'blocked' ? 'Blocked' : cs === 'error' ? 'Error' : 'Off';
       const rows = [head('SPACE'), { type: 'choice', label: 'Background', value: SOS.env, opts: ENVS.map(function (e) { return [e, e === 'passthrough' ? 'Camera' : ENV_NAMES[e].split(' ')[0]]; }), set: function (e) { SOS.setEnv(e); }, h: 130 },
         head('CAMERA'), { type: 'toggle', label: 'Use camera', value: cs === 'on', set: function () { if (SOS.camState === 'on') SOS.disableCamera(); else SOS.enableCamera(); win.dirty = true; } },
-        { type: 'info', label: 'Camera status', value: csTxt }, sl('Camera brightness', 'bright', 0.5, 1.6, 0.05, function (v) { return Math.round(v * 100) + '%'; })];
+        { type: 'info', label: 'Camera status', value: csTxt }, sl('Camera brightness', 'bright', 0.5, 1.6, 0.05, function (v) { return Math.round(v * 100) + '%'; }), sl('Camera sync (stops apps swimming)', 'camSync', 0, 250, 10, function (v) { return v + ' ms'; }), sl('Camera view size', 'camZoom', 0.6, 1.4, 0.05, function (v) { return Math.round(v * 100) + '%'; })];
       if (cs === 'blocked' || cs === 'error') { rows.push({ type: 'button', label: 'Open Android app settings', note: 'Permissions > Camera > Allow', onClick: function () { try { window.NativeBridge.openAppSettings(); } catch (e) {} } }); }
       return rows;
     }
@@ -223,7 +234,7 @@
       head('CARDBOARD'), t('Magnet button', 'magnet'), sl('Magnet trigger', 'magnetT', 15, 120, 5, function (v) { return v + ' µT'; }, function () { SOS.pushNative(); }), { type: 'info', label: 'Touch button', value: 'Tap = select · Hold = Home' },
       head('GAZE'), t('Dwell to select', 'dwell'), sl('Dwell time', 'dwellT', 0.6, 3, 0.1, function (v) { return v.toFixed(1) + ' s'; })];
     if (pane === 'sound') return [head('AUDIO'), t('Interface sounds', 'sound'), sl('Volume', 'volume', 0, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }, function () { SOS.tick(1200, 0.08, 0.1); })];
-    return [head('SPATIALOS'), { type: 'info', label: 'Version', value: '1.3' }, { type: 'info', label: 'Frame rate', value: SOS.fps + ' fps' }, { type: 'info', label: 'Head tracking', value: SOS.nativeOK ? 'Gyroscope' : 'Mouse / keys' }, { type: 'info', label: 'Camera', value: SOS.camState === 'on' ? 'Live' : 'Off' },
+    return [head('SPATIALOS'), { type: 'info', label: 'Version', value: '2.0' }, { type: 'info', label: 'Frame rate', value: SOS.fps + ' fps' }, { type: 'info', label: 'Head tracking', value: SOS.nativeOK ? 'Gyroscope' : 'Mouse / keys' }, { type: 'info', label: 'Camera', value: SOS.camState === 'on' ? 'Live' : 'Off' }, { type: 'info', label: 'AR world tracking', value: (function () { try { return window.NativeBridge.arStatus(); } catch (e) { return 'n/a'; } })() },
       { type: 'info', label: 'Hands', value: !S.hands ? 'Off' : SOS.handsState }, { type: 'info', label: 'Open windows', value: String(Object.keys(SOS.wins).length) }];
   }
   SOS.apps.settings.tick = function (win) { if (win.state.pane === 'about' || win.state.pane === 'input' || win.state.pane === 'passthrough') { win._t = (win._t || 0) + 1; if (win._t % 20 === 0) win.dirty = true; } };
@@ -418,8 +429,8 @@
 
   /* ---------- Store ---------- */
   reg({
-    id: 'store', title: 'Store', w: 1100, h: 700,
-    create(win) { win.state = { dl: {} }; },
+    id: 'store', title: 'Store', w: 1100, h: 780,
+    create(win) { win.state = { dl: {}, cat: 'All' }; },
     tick(win) {
       const st = win.state; let any = false;
       for (const k in st.dl) { any = true; if (SOS.t - st.dl[k] > 1.4) { delete st.dl[k]; SOS.installApp(k); SOS.toast((LABELS[k] || k) + ' is ready. Find it on Home.', 3); } }
@@ -427,19 +438,30 @@
     },
     draw(ui, win) {
       const c = ui.c, st = win.state, hx = 60, cw = 480, ch = 80, step = 92;
-      ui.text('App Store', hx, 52, { size: 34, weight: 700 });
+      ui.text('App Store', hx, 56, { size: 38, weight: 700 });
       const n = CATALOG.filter(function (a) { return SOS.isInstalled(a[0]); }).length;
-      ui.text(n + ' of ' + CATALOG.length + ' apps installed', win.w - hx, 52, { size: 22, align: 'right', color: WHITE2 });
-      CATALOG.forEach(function (a, i) {
-        const id = a[0], x = hx + (i % 2) * (cw + 20), y = 100 + Math.floor(i / 2) * step, inst = SOS.isInstalled(id), dl = st.dl[id] != null;
-        ui.rect(x, y, cw, ch, 24, 'rgba(255,255,255,.1)');
-        if (ICONS[id]) ICONS[id](c, x + 48, y + ch / 2, 30);
-        ui.text(a[1], x + 100, y + 28, { size: 26, weight: 700 }); ui.text(a[2], x + 100, y + 57, { size: 19, color: WHITE2 });
-        if (dl) { const f = clamp((SOS.t - st.dl[id]) / 1.4, 0, 1); c.save(); c.lineWidth = 6; c.strokeStyle = 'rgba(255,255,255,.25)'; c.beginPath(); c.arc(x + cw - 56, y + ch / 2, 20, 0, 7); c.stroke(); c.strokeStyle = '#0a84ff'; c.beginPath(); c.arc(x + cw - 56, y + ch / 2, 20, -Math.PI / 2, -Math.PI / 2 + f * Math.PI * 2); c.stroke(); c.restore(); }
-        else if (!inst) ui.btn('get_' + id, x + cw - 128, y + 16, 108, 48, { label: 'Get', size: 24, r: 24, fill: '#0a84ff', hoverFill: '#2b95ff', onClick: function () { st.dl[id] = SOS.t; win.dirty = true; } });
-        else { ui.btn('open_' + id, x + cw - 214, y + 16, 92, 48, { label: 'Open', size: 22, r: 24, fill: '#0a84ff', hoverFill: '#2b95ff', onClick: function () { SOS.open(id); } }); ui.btn('rm_' + id, x + cw - 112, y + 16, 92, 48, { label: 'Remove', size: 19, r: 24, onClick: function () { SOS.uninstallApp(id); win.dirty = true; } }); }
+      ui.text(n + ' of ' + CATALOG.length + ' installed', win.w - hx, 56, { size: 22, align: 'right', color: WHITE2 });
+      // featured
+      c.save(); rr(c, hx, 100, win.w - hx * 2, 168, 34); c.clip(); const g = c.createLinearGradient(hx, 100, win.w - hx, 268); g.addColorStop(0, '#0a63ff'); g.addColorStop(0.55, '#6a5cff'); g.addColorStop(1, '#ff6aa8'); c.fillStyle = g; c.fillRect(hx, 100, win.w, 170);
+      const rg = c.createRadialGradient(hx + 120, 120, 0, hx + 120, 120, 420); rg.addColorStop(0, 'rgba(255,255,255,.35)'); rg.addColorStop(1, 'rgba(255,255,255,0)'); c.fillStyle = rg; c.fillRect(hx, 100, win.w, 170); c.restore();
+      c.save(); c.strokeStyle = 'rgba(255,255,255,.5)'; c.lineWidth = 2; rr(c, hx + 1, 101, win.w - hx * 2 - 2, 166, 34); c.stroke(); c.restore();
+      ui.text('FEATURED', hx + 40, 138, { size: 18, weight: 700, color: 'rgba(255,255,255,.8)' }); ui.text('Spatial Browser', hx + 40, 190, { size: 46, weight: 700 }); ui.text('The whole web, all around you. Say "Spiral, open browser".', hx + 40, 232, { size: 21, color: 'rgba(255,255,255,.88)' });
+      ui.btn('feat', win.w - hx - 190, 168, 150, 54, { label: 'Open', size: 24, r: 27, fill: 'rgba(255,255,255,.3)', hoverFill: 'rgba(255,255,255,.5)', onClick: function () { SOS.open('browser', { bring: true }); } });
+      if (ICONS.browser) { c.save(); c.shadowColor = 'rgba(0,0,0,.3)'; c.shadowBlur = 24; ICONS.browser(c, win.w - hx - 300, 184, 62); c.restore(); }
+      // categories
+      ['All', 'Games', 'Tools', 'Create'].forEach(function (k, i) { ui.btn('cat_' + k, hx + i * 150, 288, 138, 50, { label: k, size: 23, r: 25, fill: st.cat === k ? '#fff' : 'rgba(255,255,255,.1)', hoverFill: st.cat === k ? '#fff' : 'rgba(255,255,255,.22)', color: st.cat === k ? '#111' : '#fff', onClick: function () { st.cat = k; win.scrollY = 0; win.dirty = true; } }); });
+      const list = CATALOG.filter(function (a) { return st.cat === 'All' || a[3] === st.cat; });
+      ui.scroll(hx - 10, 350, win.w - hx * 2 + 20, 380, Math.ceil(list.length / 2) * step + 10, function () {
+        list.forEach(function (a, i) {
+          const id = a[0], x = hx + (i % 2) * (cw + 20), y = 354 + Math.floor(i / 2) * step, inst = SOS.isInstalled(id), dl = st.dl[id] != null;
+          ui.rect(x, y, cw, ch, 24, 'rgba(255,255,255,.1)', 'rgba(255,255,255,.14)', 1.5);
+          if (ICONS[id]) ICONS[id](c, x + 48, y + ch / 2, 30);
+          ui.text(a[1], x + 100, y + 28, { size: 26, weight: 700 }); ui.text(a[2], x + 100, y + 57, { size: 19, color: WHITE2 });
+          if (dl) { const f = clamp((SOS.t - st.dl[id]) / 1.4, 0, 1); c.save(); c.lineWidth = 6; c.strokeStyle = 'rgba(255,255,255,.25)'; c.beginPath(); c.arc(x + cw - 56, y + ch / 2, 20, 0, 7); c.stroke(); c.strokeStyle = '#0a84ff'; c.beginPath(); c.arc(x + cw - 56, y + ch / 2, 20, -Math.PI / 2, -Math.PI / 2 + f * Math.PI * 2); c.stroke(); c.restore(); }
+          else if (!inst) ui.btn('get_' + id, x + cw - 128, y + 16, 108, 48, { label: 'Get', size: 24, r: 24, fill: '#0a84ff', hoverFill: '#2b95ff', onClick: function () { st.dl[id] = SOS.t; win.dirty = true; } });
+          else { ui.btn('open_' + id, x + cw - 214, y + 16, 92, 48, { label: 'Open', size: 22, r: 24, fill: '#0a84ff', hoverFill: '#2b95ff', onClick: function () { SOS.open(id); } }); ui.btn('rm_' + id, x + cw - 112, y + 16, 92, 48, { label: 'Remove', size: 19, r: 24, onClick: function () { SOS.uninstallApp(id); win.dirty = true; } }); }
+        });
       });
-      ui.text('Everything runs on your phone. Nothing is downloaded or tracked.', win.w / 2, 100 + 6 * step + 18, { size: 20, align: 'center', color: WHITE2 });
     }
   });
 

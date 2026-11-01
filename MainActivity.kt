@@ -22,9 +22,19 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.SessionConfiguration
 import android.media.Image
 import android.media.ImageReader
 import android.os.Handler
+import android.os.Looper
+import android.view.MotionEvent
+import android.widget.FrameLayout
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import com.google.ar.core.ArCoreApk
+import org.json.JSONObject
 import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.DisplayMetrics
@@ -66,13 +76,16 @@ class MainActivity : Activity(), SensorEventListener {
 
     private val host = "appassets.androidplatform.net"
     private lateinit var web: WebView
+    private lateinit var root: FrameLayout
     private lateinit var sm: SensorManager
     private var rotSensor: Sensor? = null
     private var magSensor: Sensor? = null
 
     private val rIn = FloatArray(9)
     private val rOut = FloatArray(9)
-    @Volatile private var pose: String = ""
+    private val poseArr = FloatArray(9)
+    @Volatile private var poseValid = false
+    private val poseSb = StringBuilder(160)
 
     // magnet button (Cardboard v1)
     @Volatile private var clicks = 0
@@ -100,6 +113,9 @@ class MainActivity : Activity(), SensorEventListener {
             ?: sm.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
         magSensor = sm.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
 
+        root = FrameLayout(this)
+        root.setBackgroundColor(Color.BLACK)
+        setContentView(root)
         setupWeb()
         loadApp()
     }
@@ -110,7 +126,7 @@ class MainActivity : Activity(), SensorEventListener {
         web.overScrollMode = View.OVER_SCROLL_NEVER
         web.isVerticalScrollBarEnabled = false
         web.isHorizontalScrollBarEnabled = false
-        setContentView(web)
+        root.addView(web, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
         val s = web.settings
         s.javaScriptEnabled = true
@@ -166,7 +182,173 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         val ok = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
-        web.evaluateJavascript("window.SOS && SOS.onCamPerm($ok)", null)
+        if (requestCode == 8) web.evaluateJavascript("window.SOS && SOS.onMicPerm($ok)", null)
+        else web.evaluateJavascript("window.SOS && SOS.onCamPerm($ok)", null)
+    }
+
+    // ---- spatial browser: an offscreen WebView rendered to JPEG frames ----
+    private var bweb: WebView? = null
+    private var bBmp: Bitmap? = null
+    @Volatile private var bJpeg: ByteArray? = null
+    @Volatile private var bSeq = 0
+    @Volatile private var bInfo = "{}"
+    private var bW = 1280
+    private var bH = 720
+    private var bActive = false
+    private var bDown = 0L
+    private val bHandler = Handler(Looper.getMainLooper())
+    private val bOut = ByteArrayOutputStream(120000)
+    private var bProgress = 100
+    private val bTick = object : Runnable {
+        override fun run() {
+            if (!bActive) return
+            try {
+                val w = bweb
+                val bmp = bBmp
+                if (w != null && bmp != null) {
+                    val c = android.graphics.Canvas(bmp)
+                    c.drawColor(Color.WHITE)
+                    w.draw(c)
+                    bOut.reset()
+                    bmp.compress(Bitmap.CompressFormat.JPEG, 68, bOut)
+                    bJpeg = bOut.toByteArray()
+                    bSeq += 1
+                    bInfo = "{\"url\":" + JSONObject.quote(w.url ?: "") + ",\"title\":" + JSONObject.quote(w.title ?: "") + ",\"p\":" + bProgress + ",\"back\":" + w.canGoBack() + ",\"fwd\":" + w.canGoForward() + "}"
+                }
+            } catch (e: Throwable) {
+            }
+            bHandler.postDelayed(this, 110L)
+        }
+    }
+
+    private fun browserStartNow(w: Int, h: Int) {
+        try {
+            bW = w.coerceIn(640, 1600)
+            bH = h.coerceIn(360, 900)
+            if (bweb == null) {
+                val b = WebView(this)
+                b.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+                b.isFocusable = false
+                b.isFocusableInTouchMode = false
+                b.setBackgroundColor(Color.WHITE)
+                val s = b.settings
+                s.javaScriptEnabled = true
+                s.domStorageEnabled = true
+                s.useWideViewPort = true
+                s.loadWithOverviewMode = true
+                s.setSupportZoom(false)
+                s.builtInZoomControls = false
+                s.mediaPlaybackRequiresUserGesture = true
+                s.userAgentString = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                b.webViewClient = object : WebViewClient() {
+                    override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                        window.decorView.post { browserStopNow(); bweb = null }
+                        return true
+                    }
+                }
+                b.webChromeClient = object : WebChromeClient() {
+                    override fun onProgressChanged(view: WebView, newProgress: Int) { bProgress = newProgress }
+                }
+                root.addView(b, 0, FrameLayout.LayoutParams(bW, bH))
+                bweb = b
+            }
+            val old = bBmp
+            if (old == null || old.width != bW || old.height != bH) {
+                bBmp = Bitmap.createBitmap(bW, bH, Bitmap.Config.RGB_565)
+            }
+            bweb?.layoutParams = FrameLayout.LayoutParams(bW, bH)
+            bweb?.onResume()
+            bActive = true
+            bHandler.removeCallbacks(bTick)
+            bHandler.post(bTick)
+        } catch (e: Throwable) {
+            bInfo = "{\"error\":true}"
+        }
+    }
+
+    private fun browserStopNow() {
+        bActive = false
+        bHandler.removeCallbacks(bTick)
+        try { bweb?.onPause() } catch (e: Throwable) { }
+    }
+
+    private fun browserLoadNow(url: String) {
+        var u = url.trim()
+        if (u.isEmpty()) return
+        val hasScheme = u.startsWith("http://") || u.startsWith("https://") || u.startsWith("file:") || u.startsWith("about:")
+        if (!hasScheme) {
+            u = if (u.contains(" ") || !u.contains(".")) "https://duckduckgo.com/?q=" + Uri.encode(u) else "https://$u"
+        }
+        try { bweb?.loadUrl(u) } catch (e: Throwable) { }
+    }
+
+    private fun browserTouchNow(action: Int, x: Float, y: Float) {
+        val b = bweb ?: return
+        try {
+            val now = SystemClock.uptimeMillis()
+            if (action == 0) bDown = now
+            val ev = MotionEvent.obtain(bDown, now, action, x, y, 0)
+            b.dispatchTouchEvent(ev)
+            ev.recycle()
+        } catch (e: Throwable) { }
+    }
+
+    private fun browserTypeNow(text: String) {
+        val b = bweb ?: return
+        val js = "(function(t){var e=document.activeElement;if(e&&(e.tagName==='INPUT'||e.tagName==='TEXTAREA'||e.isContentEditable)){if(e.isContentEditable){document.execCommand('insertText',false,t);return;}var s=e.selectionStart||0,n=e.selectionEnd||0;e.value=e.value.slice(0,s)+t+e.value.slice(n);try{e.selectionStart=e.selectionEnd=s+t.length;}catch(x){}e.dispatchEvent(new Event('input',{bubbles:true}));}})(" + JSONObject.quote(text) + ")"
+        b.evaluateJavascript(js, null)
+    }
+
+    private fun browserKeyNow(name: String) {
+        val b = bweb ?: return
+        val js = if (name == "Backspace")
+            "(function(){var e=document.activeElement;if(e&&(e.tagName==='INPUT'||e.tagName==='TEXTAREA')){var s=e.selectionStart||0,n=e.selectionEnd||0;if(n>s){e.value=e.value.slice(0,s)+e.value.slice(n);}else if(s>0){e.value=e.value.slice(0,s-1)+e.value.slice(s);s=s-1;}try{e.selectionStart=e.selectionEnd=s;}catch(x){}e.dispatchEvent(new Event('input',{bubbles:true}));}else if(e&&e.isContentEditable){document.execCommand('delete');}})()"
+        else
+            "(function(){var e=document.activeElement;if(!e)return;['keydown','keypress','keyup'].forEach(function(t){e.dispatchEvent(new KeyboardEvent(t,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));});if(e.form){if(e.form.requestSubmit){e.form.requestSubmit();}else{e.form.submit();}}})()"
+        b.evaluateJavascript(js, null)
+    }
+
+    // ---- voice input (Android speech recognizer) ----
+    private var recognizer: SpeechRecognizer? = null
+
+    private fun jsVoice(text: String, fin: Boolean, err: String) {
+        val js = "window.SOS && SOS.onVoice(" + JSONObject.quote(text) + "," + fin + "," + JSONObject.quote(err) + ")"
+        runOnUiThread { try { web.evaluateJavascript(js, null) } catch (e: Exception) { } }
+    }
+
+    private fun startVoiceNow() {
+        runOnUiThread {
+            try {
+                if (!SpeechRecognizer.isRecognitionAvailable(this)) { jsVoice("", true, "unavailable"); return@runOnUiThread }
+                try { recognizer?.destroy() } catch (e: Exception) { }
+                val r = SpeechRecognizer.createSpeechRecognizer(this)
+                recognizer = r
+                r.setRecognitionListener(object : RecognitionListener {
+                    override fun onReadyForSpeech(params: Bundle?) { web.evaluateJavascript("window.SOS && SOS.onVoiceState('listening')", null) }
+                    override fun onBeginningOfSpeech() {}
+                    override fun onRmsChanged(rmsdB: Float) {}
+                    override fun onBufferReceived(buffer: ByteArray?) {}
+                    override fun onEndOfSpeech() { web.evaluateJavascript("window.SOS && SOS.onVoiceState('thinking')", null) }
+                    override fun onError(error: Int) { jsVoice("", true, "error $error") }
+                    override fun onResults(results: Bundle?) {
+                        val l = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        jsVoice(if (l != null && l.isNotEmpty()) l[0] else "", true, "")
+                    }
+                    override fun onPartialResults(partialResults: Bundle?) {
+                        val l = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        if (l != null && l.isNotEmpty()) jsVoice(l[0], false, "")
+                    }
+                    override fun onEvent(eventType: Int, params: Bundle?) {}
+                })
+                val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                r.startListening(i)
+            } catch (e: Exception) {
+                jsVoice("", true, "error " + (e.message ?: ""))
+            }
+        }
     }
 
     private fun mimeOf(path: String): String {
@@ -193,6 +375,10 @@ class MainActivity : Activity(), SensorEventListener {
             return WebResourceResponse("text/plain", "utf-8", 403, "Forbidden", headers, ByteArrayInputStream(ByteArray(0)))
         }
         var path = uri.path ?: "/"
+        if (path == "/browser.jpg") {
+            val b = bJpeg ?: ByteArray(0)
+            return WebResourceResponse("image/jpeg", null, 200, "OK", headers, ByteArrayInputStream(b))
+        }
         if (path == "/cam.jpg") {
             val b = camJpeg ?: ByteArray(0)
             return WebResourceResponse("image/jpeg", null, 200, "OK", headers, ByteArrayInputStream(b))
@@ -211,7 +397,15 @@ class MainActivity : Activity(), SensorEventListener {
 
     inner class Bridge {
         @JavascriptInterface
-        fun pose(): String = this@MainActivity.pose
+        fun pose(): String {
+            if (!poseValid) return ""
+            val sb = poseSb
+            sb.setLength(0)
+            synchronized(poseArr) {
+                for (i in 0 until 9) { if (i > 0) sb.append(','); sb.append(poseArr[i]) }
+            }
+            return sb.toString()
+        }
 
         @JavascriptInterface
         fun takeClicks(): Int {
@@ -273,6 +467,9 @@ class MainActivity : Activity(), SensorEventListener {
         fun camRot(): Int = camRotation()
 
         @JavascriptInterface
+        fun camFov(): Double = camHFov
+
+        @JavascriptInterface
         fun screenMM(): Double {
             val dm = DisplayMetrics()
             @Suppress("DEPRECATION")
@@ -280,6 +477,71 @@ class MainActivity : Activity(), SensorEventListener {
             val longPx = Math.max(dm.widthPixels, dm.heightPixels).toDouble()
             val dpi = if (dm.widthPixels >= dm.heightPixels) dm.xdpi.toDouble() else dm.ydpi.toDouble()
             return if (dpi > 50) longPx / dpi * 25.4 else 150.0
+        }
+
+        @JavascriptInterface
+        fun browserStart(w: Int, h: Int): Boolean { runOnUiThread { browserStartNow(w, h) }; return true }
+
+        @JavascriptInterface
+        fun browserStop() { runOnUiThread { browserStopNow() } }
+
+        @JavascriptInterface
+        fun browserLoad(url: String) { runOnUiThread { browserLoadNow(url) } }
+
+        @JavascriptInterface
+        fun browserNav(cmd: String) {
+            runOnUiThread {
+                val b = bweb ?: return@runOnUiThread
+                when (cmd) {
+                    "back" -> if (b.canGoBack()) b.goBack()
+                    "forward" -> if (b.canGoForward()) b.goForward()
+                    "reload" -> b.reload()
+                    "stop" -> b.stopLoading()
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun browserTouch(action: Int, x: Float, y: Float) { runOnUiThread { browserTouchNow(action, x, y) } }
+
+        @JavascriptInterface
+        fun browserType(text: String) { runOnUiThread { browserTypeNow(text) } }
+
+        @JavascriptInterface
+        fun browserKey(name: String) { runOnUiThread { browserKeyNow(name) } }
+
+        @JavascriptInterface
+        fun browserScroll(dy: Int) { runOnUiThread { bweb?.scrollBy(0, dy) } }
+
+        @JavascriptInterface
+        fun browserSeq(): Int = bSeq
+
+        @JavascriptInterface
+        fun browserInfo(): String = bInfo
+
+        @JavascriptInterface
+        fun hasMicPermission(): Boolean =
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+        @JavascriptInterface
+        fun requestMicPermission() {
+            runOnUiThread { requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 8) }
+        }
+
+        @JavascriptInterface
+        fun startVoice() { startVoiceNow() }
+
+        @JavascriptInterface
+        fun stopVoice() {
+            runOnUiThread { try { recognizer?.stopListening() } catch (e: Exception) { } }
+        }
+
+        @JavascriptInterface
+        fun arStatus(): String {
+            return try {
+                val a = ArCoreApk.getInstance().checkAvailability(this@MainActivity)
+                if (a.isSupported) "supported" else if (a.isTransient) "checking" else "not supported"
+            } catch (e: Throwable) { "unknown" }
         }
 
         @JavascriptInterface
@@ -402,6 +664,17 @@ class MainActivity : Activity(), SensorEventListener {
         return if (camFront) (camSensor + d) % 360 else (camSensor - d + 360) % 360
     }
 
+    private var skipPhys = false
+    @Volatile private var camHFov = 70.0
+
+    private fun hfovOf(ch: CameraCharacteristics): Double {
+        val f = ch.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.minOrNull() ?: return 70.0
+        val sz = ch.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE) ?: return 70.0
+        val w = Math.max(sz.width, sz.height).toDouble()
+        if (f <= 0f || w <= 0.0) return 70.0
+        return Math.toDegrees(2.0 * Math.atan(w / (2.0 * f.toDouble())))
+    }
+
     private fun startNativeCamera(): Boolean {
         if (camState == "on" || camState == "starting") return true
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
@@ -410,20 +683,45 @@ class MainActivity : Activity(), SensorEventListener {
         camState = "starting"
         try {
             val cm = getSystemService(CAMERA_SERVICE) as CameraManager
-            var id: String? = null
-            for (c in cm.cameraIdList) {
-                val ch = cm.getCameraCharacteristics(c)
-                if (ch.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK) { id = c; break }
+            val ids = cm.cameraIdList
+            // pick the widest back lens (ultra-wide when the phone exposes it) so the world is not magnified
+            var openId: String? = null
+            var physId: String? = null
+            var bestFov = 0.0
+            for (c in ids) {
+                val chc = cm.getCameraCharacteristics(c)
+                if (chc.get(CameraCharacteristics.LENS_FACING) != CameraCharacteristics.LENS_FACING_BACK) continue
+                val f = hfovOf(chc)
+                if (openId == null || f > bestFov + 3.0) { bestFov = f; openId = c; physId = null }
+                if (Build.VERSION.SDK_INT >= 28 && !skipPhys) {
+                    for (p in chc.physicalCameraIds) {
+                        try {
+                            val pf = hfovOf(cm.getCameraCharacteristics(p))
+                            if (pf > bestFov + 3.0) {
+                                bestFov = pf
+                                if (ids.contains(p)) { openId = p; physId = null } else { openId = c; physId = p }
+                            }
+                        } catch (e: Exception) { }
+                    }
+                }
             }
-            if (id == null) id = cm.cameraIdList.firstOrNull()
-            if (id == null) { camState = "error"; camErr = "no camera"; return false }
+            if (openId == null) openId = ids.firstOrNull()
+            val id: String = openId ?: run { camState = "error"; camErr = "no camera"; return false }
             val ch = cm.getCameraCharacteristics(id)
             camSensor = ch.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
             camFront = ch.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+            var zoom = 1f
+            if (physId == null && Build.VERSION.SDK_INT >= 30) {
+                val zr = ch.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+                if (zr != null && zr.lower < 1f) zoom = Math.max(zr.lower, 0.6f)
+            }
+            camHFov = if (physId == null) hfovOf(ch) else bestFov
+            if (zoom < 1f) camHFov = Math.toDegrees(2.0 * Math.atan(Math.tan(Math.toRadians(camHFov / 2.0)) / zoom.toDouble()))
             val map = ch.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             val sizes = map?.getOutputSizes(ImageFormat.YUV_420_888)
             if (sizes == null || sizes.isEmpty()) { camState = "error"; camErr = "no sizes"; return false }
-            var best = sizes.filter { it.width <= 960 && it.height <= 720 }.maxByOrNull { it.width * it.height }
+            var best = sizes.filter { it.width <= 1280 && it.height <= 960 && it.width * 3 == it.height * 4 }.maxByOrNull { it.width * it.height }
+            if (best == null) best = sizes.filter { it.width <= 1280 && it.height <= 960 }.maxByOrNull { it.width * it.height }
             if (best == null) best = sizes.minByOrNull { it.width * it.height }!!
             val th = HandlerThread("cam")
             th.start()
@@ -437,7 +735,7 @@ class MainActivity : Activity(), SensorEventListener {
                 if (img != null) {
                     try {
                         val now = SystemClock.uptimeMillis()
-                        if (now - camLastMs >= 45L) {
+                        if (now - camLastMs >= 30L) {
                             camLastMs = now
                             val jpg = yuvToJpeg(img)
                             if (jpg != null) { camJpeg = jpg; camSeqN += 1; feedHands(jpg) }
@@ -448,29 +746,46 @@ class MainActivity : Activity(), SensorEventListener {
                     }
                 }
             }, h)
+            val usePhys = physId
+            val sessionCb = object : CameraCaptureSession.StateCallback() {
+                override fun onConfigured(session: CameraCaptureSession) {
+                    camSession = session
+                    try {
+                        val dev = camDev ?: return
+                        val rb = dev.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                        rb.addTarget(reader.surface)
+                        rb.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                        if (zoom < 1f && Build.VERSION.SDK_INT >= 30) rb.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom)
+                        session.setRepeatingRequest(rb.build(), null, h)
+                        camState = "on"
+                    } catch (e: Exception) {
+                        camState = "error"; camErr = "request: " + e.message
+                    }
+                }
+
+                override fun onConfigureFailed(session: CameraCaptureSession) {
+                    if (usePhys != null && !skipPhys) {
+                        // that phone would not give us the wide lens directly: retry with the normal lens
+                        skipPhys = true
+                        runOnUiThread { stopNativeCamera(); startNativeCamera() }
+                    } else {
+                        camState = "error"; camErr = "configure failed"
+                    }
+                }
+            }
             cm.openCamera(id, object : CameraDevice.StateCallback() {
                 override fun onOpened(device: CameraDevice) {
                     camDev = device
                     try {
-                        @Suppress("DEPRECATION")
-                        device.createCaptureSession(listOf(reader.surface), object : CameraCaptureSession.StateCallback() {
-                            override fun onConfigured(session: CameraCaptureSession) {
-                                camSession = session
-                                try {
-                                    val rb = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-                                    rb.addTarget(reader.surface)
-                                    rb.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                                    session.setRepeatingRequest(rb.build(), null, h)
-                                    camState = "on"
-                                } catch (e: Exception) {
-                                    camState = "error"; camErr = "request: " + e.message
-                                }
-                            }
-
-                            override fun onConfigureFailed(session: CameraCaptureSession) {
-                                camState = "error"; camErr = "configure failed"
-                            }
-                        }, h)
+                        if (usePhys != null && Build.VERSION.SDK_INT >= 28) {
+                            val oc = OutputConfiguration(reader.surface)
+                            oc.setPhysicalCameraId(usePhys)
+                            val sc = SessionConfiguration(SessionConfiguration.SESSION_REGULAR, listOf(oc), java.util.concurrent.Executor { r -> h.post(r) }, sessionCb)
+                            device.createCaptureSession(sc)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            device.createCaptureSession(listOf(reader.surface), sessionCb, h)
+                        }
                     } catch (e: Exception) {
                         camState = "error"; camErr = "session: " + e.message
                     }
@@ -640,7 +955,8 @@ class MainActivity : Activity(), SensorEventListener {
                     Surface.ROTATION_180 -> SensorManager.remapCoordinateSystem(rIn, SensorManager.AXIS_MINUS_X, SensorManager.AXIS_MINUS_Y, rOut)
                     else -> System.arraycopy(rIn, 0, rOut, 0, 9)
                 }
-                pose = rOut.joinToString(",")
+                synchronized(poseArr) { System.arraycopy(rOut, 0, poseArr, 0, 9) }
+                poseValid = true
             }
             Sensor.TYPE_MAGNETIC_FIELD -> onMagnet(event)
         }
@@ -687,18 +1003,21 @@ class MainActivity : Activity(), SensorEventListener {
         hideSystemUi()
         web.onResume()
         if (camWanted) startNativeCamera()
+        if (bActive) { bHandler.removeCallbacks(bTick); bHandler.post(bTick) }
         rotSensor?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_FASTEST) }
         magSensor?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
     }
 
     override fun onPause() {
         if (camWanted) stopNativeCamera()
+        if (bActive) { bHandler.removeCallbacks(bTick) }
         sm.unregisterListener(this)
         web.onPause()
         super.onPause()
     }
 
     override fun onDestroy() {
+        try { recognizer?.destroy() } catch (e: Exception) { }
         handsWanted = false
         stopNativeHands()
         stopNativeCamera()
