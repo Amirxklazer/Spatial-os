@@ -41,7 +41,7 @@ jobs:
           need() { [ -f "$1" ] || { echo "::error::Missing file in repo root: $1"; exit 1; }; }
 
           for f in settings.gradle build.gradle gradle.properties app_build.gradle AndroidManifest.xml MainActivity.kt ic_launcher.png \
-                   index.html three.min.js core.js apps.js apps2.js apps3.js handtrack.js; do
+                   index.html three.min.js core.js apps.js apps2.js apps3.js apps4.js handtrack.js; do
             need "$f"
           done
 
@@ -50,7 +50,7 @@ jobs:
           cp MainActivity.kt "$P/java/com/spatialos/cardboard/MainActivity.kt"
           cp ic_launcher.png "$P/res/mipmap-xxhdpi/ic_launcher.png"
 
-          for f in index.html three.min.js core.js apps.js apps2.js apps3.js handtrack.js; do
+          for f in index.html three.min.js core.js apps.js apps2.js apps3.js apps4.js handtrack.js; do
             cp "$f" "$P/assets/$f"
           done
 
