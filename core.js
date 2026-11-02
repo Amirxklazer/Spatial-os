@@ -1,15 +1,15 @@
 'use strict';
-/* SpatialOS core: stereo renderer, lens distortion, camera passthrough, window manager, pointers */
+/* Orbit OS core: stereo renderer, lens distortion, camera passthrough, window manager, pointers */
 (function () {
   const T = THREE;
   const SOS = (window.SOS = { apps: {}, wins: {}, hands: [], env: 'passthrough', videoReady: false, video: null, t: 0, fps: 60, zc: 1, vidAspect: 16 / 9, yawRaw: 0, pitchRaw: 0 });
 
   /* ---------- settings ---------- */
-  const DEF = { ipd: 63, lensSep: 62, fov: 82, distortion: true, lens: 0.4, resScale: 0.9, autoRes: true, comfort: true, predict: 30, camSync: 110, camZoom: 1, theme: 'liquid', spiral: true, divider: true, winScale: 1, bright: 1, hands: false, palm: true, magnet: true, magnetT: 45, dwell: false, dwellT: 1.4, handCursor: false, volume: 0.7, sound: true, env: 'night', camera: false, wake: false, speak: true, world: true, gmodel: 'gemini-flash-latest' };
+  const DEF = { ipd: 63, lensSep: 62, fov: 82, distortion: true, lens: 0.4, resScale: 0.9, autoRes: true, comfort: true, predict: 30, camSync: 110, camZoom: 1, theme: 'liquid', spiral: false, wide: false, kbScale: 1, divider: true, winScale: 1, bright: 1, hands: false, palm: true, magnet: true, magnetT: 45, dwell: false, dwellT: 1.4, handCursor: false, volume: 0.7, sound: true, env: 'night', camera: false, wake: false, speak: true, world: false, gmodel: 'gemini-flash-latest' };
   SOS.settings = Object.assign({}, DEF);
   try { Object.assign(SOS.settings, JSON.parse(localStorage.getItem('sos.settings') || '{}')); } catch (e) {}
   // v1.2 migration: hand tracking was the likely crash source, so it starts off again for everyone
-  try { if (localStorage.getItem('sos.v') !== '2.1') { SOS.settings.hands = false; SOS.settings.camera = false; SOS.settings.resScale = 0.9; SOS.settings.lens = 0.4; localStorage.setItem('sos.v', '2.1'); } } catch (e) {}
+  try { if (localStorage.getItem('sos.v') !== '3.0') { SOS.settings.hands = false; SOS.settings.camera = false; SOS.settings.resScale = 0.9; SOS.settings.lens = 0.4; SOS.settings.spiral = false; SOS.settings.wake = false; SOS.settings.world = false; SOS.settings.wide = false; localStorage.setItem('sos.v', '3.0'); try { localStorage.setItem('sos.run', 'ok'); localStorage.setItem('sos.handsrun', '0'); } catch (e2) {} } } catch (e) {}
   SOS.save = function () { try { localStorage.setItem('sos.settings', JSON.stringify(SOS.settings)); } catch (e) {} };
   SOS.resetSettings = function () { Object.assign(SOS.settings, DEF); SOS.save(); SOS.applySettings(); };
 
@@ -793,7 +793,9 @@
   Object.defineProperty(camCv, 'videoWidth', { get: function () { return camCv._ok ? camCv.width : 0; } });
   Object.defineProperty(camCv, 'videoHeight', { get: function () { return camCv._ok ? camCv.height : 0; } });
   camCv.readyState = 0; camCv.HAVE_CURRENT_DATA = 2;
-  let camTimer = 0, camSeqSeen = -1, camBusy = false, camTex = null, camNative = false;
+  let camWatchT = 0;
+  let camTimer = 0, camSeqSeen = -1, camBusy = false, camTex = null, camNative = false, camFell = false, camT0 = 0, camWarned = false;
+  SOS.camDiag = function () { try { return window.NativeBridge.camDiag(); } catch (e) { return 'n/a'; } };
   function camPump() {
     if (camBusy || SOS.camState !== 'on') return;
     let seq = 0; try { seq = NativeBridge.camSeq(); } catch (e) { return; }
@@ -823,18 +825,28 @@
       const nat = hasNative && typeof window.NativeBridge.startCamera === 'function';
       if (nat && !window.NativeBridge.hasCameraPermission()) {
         const ok = await new Promise(function (res) { SOS._camRes = res; try { window.NativeBridge.requestCameraPermission(); } catch (e) { res(false); } setTimeout(function () { if (SOS._camRes === res) { SOS._camRes = null; res(false); } }, 60000); });
-        if (!ok) { SOS.camState = 'blocked'; SOS.toast('Camera is blocked. Android Settings > Apps > SpatialOS > Permissions > Camera, then Allow.', 7); return false; }
+        if (!ok) { SOS.camState = 'blocked'; SOS.toast('Camera is blocked. Android Settings > Apps > Orbit OS > Permissions > Camera, then Allow.', 7); return false; }
       }
       if (nat) {
-        camNative = true; camCv._ok = false; camCv.readyState = 0; camSeqSeen = -1;
+        camNative = true; camCv._ok = false; camCv.readyState = 0; camSeqSeen = -1; camFell = false;
+        try { if (window.NativeBridge.setWideLens) window.NativeBridge.setWideLens(!!SOS.settings.wide); } catch (e) {}
+        const waitCam = async function (ms) { const t0 = performance.now(); await new Promise(function (r) { setTimeout(r, 350); }); let st = window.NativeBridge.camStatus(); while ((st === 'starting' || st === 'off') && performance.now() - t0 < ms) { await new Promise(function (r) { setTimeout(r, 60); }); st = window.NativeBridge.camStatus(); } return st; };
         if (!window.NativeBridge.startCamera()) throw new Error('native camera: ' + window.NativeBridge.camStatus());
         SOS.camState = 'on';
-        for (let i = 0; i < 160 && window.NativeBridge.camStatus() === 'starting'; i++) await new Promise(function (r) { setTimeout(r, 50); });
-        if (window.NativeBridge.camStatus() !== 'on') throw new Error(window.NativeBridge.camStatus());
+        let st = await waitCam(5000);
+        if (st !== 'on') { camFell = true; try { window.NativeBridge.camFallback(); } catch (e) {} st = await waitCam(6000); }   // ARCore / wide lens failed: retry with the plain back camera
+        if (st !== 'on') throw new Error(SOS.camDiag());
+        camT0 = performance.now();
         try { SOS.camHFov = window.NativeBridge.camFov(); } catch (e) { SOS.camHFov = 0; }
         SOS.attachVideo(camCv);
         try { SOS.stream = camCv.captureStream(24); } catch (e) { SOS.stream = null; }
-        clearInterval(camTimer); camTimer = setInterval(camPump, 16);
+        clearInterval(camTimer); camTimer = setInterval(camPump, 16); camWarned = false;
+        clearInterval(camWatchT); camWatchT = setInterval(function () {
+          if (SOS.camState !== 'on' || !camNative || camCv._ok) return;
+          const dt = performance.now() - camT0;
+          if (!camFell && dt > 3500) { camFell = true; camSeqSeen = -1; try { window.NativeBridge.camFallback(); SOS.toast('No camera picture yet, switching to the plain camera…', 3); } catch (e) {} camT0 = performance.now(); }
+          else if (camFell && dt > 5000 && !camWarned) { camWarned = true; SOS.toast('Camera is not sending pictures. ' + SOS.camDiag(), 8); }
+        }, 700);
       } else {
         const video = document.getElementById('cam');
         const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 24, max: 30 } }, audio: false });
@@ -853,7 +865,7 @@
     }
   };
   SOS.disableCamera = function () {
-    clearInterval(camTimer);
+    clearInterval(camTimer); clearInterval(camWatchT);
     try { if (camNative) window.NativeBridge.stopCamera(); } catch (e) {}
     if (SOS.stream) { try { SOS.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} }
     SOS.stream = null; camCv._ok = false; camCv.readyState = 0;
@@ -873,7 +885,7 @@
     try {
       if (!nb.hasMicPermission()) {
         const ok = await new Promise(function (res) { SOS._micRes = res; nb.requestMicPermission(); setTimeout(function () { if (SOS._micRes === res) { SOS._micRes = null; res(false); } }, 60000); });
-        if (!ok) { SOS.toast('Microphone is blocked. Android Settings > Apps > SpatialOS > Permissions > Microphone.', 6); return false; }
+        if (!ok) { SOS.toast('Microphone is blocked. Android Settings > Apps > Orbit OS > Permissions > Microphone.', 6); return false; }
       }
       SOS.listening = true; SOS.voicePartial = ''; SOS.redrawVoice(); nb.startVoice(); return true;
     } catch (e) { SOS.listening = false; return false; }

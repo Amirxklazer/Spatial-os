@@ -1,5 +1,5 @@
 'use strict';
-/* SpatialOS 1.1 apps: Toast, Camera, Gallery (photos + videos, stored on the device) */
+/* Orbit OS apps: Toast, Camera, Gallery (photos + videos, stored on the device) */
 (function () {
   const SOS = window.SOS, S = SOS.settings, U = SOS.util, FONT = SOS.FONT;
   const clamp = U.clamp, rr = U.rr, reg = SOS.registerApp;
@@ -57,7 +57,7 @@
   async function saveToPhone(rec) {
     const mime = (rec.blob.type || (rec.type === 'photo' ? 'image/jpeg' : 'video/webm')).split(';')[0];
     const ext = rec.type === 'photo' ? 'jpg' : (mime.indexOf('mp4') >= 0 ? 'mp4' : 'webm'), d = new Date(rec.ts);
-    const name = 'SpatialOS_' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '_' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) + '.' + ext;
+    const name = 'OrbitOS_' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '_' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) + '.' + ext;
     const NB = window.NativeBridge;
     try {
       if (NB && typeof NB.beginSave === 'function') {

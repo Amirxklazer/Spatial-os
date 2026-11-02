@@ -335,7 +335,12 @@ class MainActivity : Activity(), SensorEventListener {
     private var arThread: Thread? = null
     @Volatile private var arRun = false
     @Volatile private var arTracking = false
-    @Volatile private var arWanted = true
+    @Volatile private var arWanted = false
+    @Volatile private var arSkip = false
+    @Volatile private var wantWide = false
+    @Volatile private var camPath = ""
+    @Volatile private var camW = 0
+    @Volatile private var camH = 0
     @Volatile private var arHave = false
     private var arInstallAsked = false
     private val arPos = FloatArray(3)
@@ -346,7 +351,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var arSy = 0f
 
     private fun tryStartAr(): Boolean {
-        if (!arWanted) return false
+        if (!arWanted || arSkip) return false
         try {
             val av = ArCoreApk.getInstance().checkAvailability(this)
             if (!av.isSupported) return false
@@ -385,6 +390,7 @@ class MainActivity : Activity(), SensorEventListener {
             arHave = false
             arPsiInit = false
             camState = "starting"
+            camPath = "ARCore room tracking"
             val t = Thread { arLoop(s) }
             t.name = "arcore"
             arThread = t
@@ -465,7 +471,7 @@ class MainActivity : Activity(), SensorEventListener {
                         if (now - camLastMs >= 38L) {
                             camLastMs = now
                             val jpg = yuvToJpeg(img)
-                            if (jpg != null) { camJpeg = jpg; camSeqN += 1; camState = "on"; feedHands(jpg) }
+                            if (jpg != null) { camJpeg = jpg; camW = img.width; camH = img.height; camSeqN += 1; camState = "on"; feedHands(jpg) }
                         }
                     } finally {
                         img.close()
@@ -474,8 +480,12 @@ class MainActivity : Activity(), SensorEventListener {
                 Thread.sleep(8)
             }
         } catch (e: Throwable) {
-            camErr = "ar: " + (e.message ?: "")
-            if (arRun) { camState = "error" }
+            camErr = "ar: " + (e.message ?: e.javaClass.simpleName)
+            if (arRun) {
+                // ARCore could not run on this phone: drop it and use the plain camera instead of leaving a black screen
+                arSkip = true
+                runOnUiThread { stopNativeCamera(); startNativeCamera() }
+            }
         } finally {
             try { s.pause() } catch (e: Throwable) { }
             try { s.close() } catch (e: Throwable) { }
@@ -772,6 +782,21 @@ class MainActivity : Activity(), SensorEventListener {
         @JavascriptInterface
         fun camSeq(): Int = camSeqN
 
+        // one-tap rescue used by the app when the camera says "on" but no pictures arrive: plain back camera, no ARCore, no wide lens
+        @JavascriptInterface
+        fun camFallback() {
+            arSkip = true
+            skipPhys = true
+            wantWide = false
+            runOnUiThread { stopNativeCamera(); startNativeCamera() }
+        }
+
+        @JavascriptInterface
+        fun setWideLens(on: Boolean) { wantWide = on; if (on) skipPhys = false }
+
+        @JavascriptInterface
+        fun camDiag(): String = camState + " | " + (if (camPath.isEmpty()) "no path yet" else camPath) + " | frames " + camSeqN + " | " + camW + "x" + camH + (if (camErr.isNotEmpty()) " | " + camErr else "")
+
         @JavascriptInterface
         fun camRot(): Int = camRotation()
 
@@ -1021,6 +1046,7 @@ class MainActivity : Activity(), SensorEventListener {
             camState = "error"; camErr = "no permission"; return false
         }
         camState = "starting"
+        camErr = ""
         if (tryStartAr()) return true
         try {
             val cm = getSystemService(CAMERA_SERVICE) as CameraManager
@@ -1033,6 +1059,7 @@ class MainActivity : Activity(), SensorEventListener {
                 val chc = cm.getCameraCharacteristics(c)
                 if (chc.get(CameraCharacteristics.LENS_FACING) != CameraCharacteristics.LENS_FACING_BACK) continue
                 val f = hfovOf(chc)
+                if (!wantWide) { if (openId == null) { bestFov = f; openId = c; physId = null }; continue }
                 if (openId == null || f > bestFov + 3.0) { bestFov = f; openId = c; physId = null }
                 if (Build.VERSION.SDK_INT >= 28 && !skipPhys) {
                     for (p in chc.physicalCameraIds) {
@@ -1052,11 +1079,12 @@ class MainActivity : Activity(), SensorEventListener {
             camSensor = ch.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
             camFront = ch.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
             var zoom = 1f
-            if (physId == null && Build.VERSION.SDK_INT >= 30) {
+            if (wantWide && physId == null && Build.VERSION.SDK_INT >= 30) {
                 val zr = ch.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
                 if (zr != null && zr.lower < 1f) zoom = Math.max(zr.lower, 0.6f)
             }
             camHFov = if (physId == null) hfovOf(ch) else bestFov
+            camPath = if (physId != null) "Camera2 (wide lens)" else if (zoom < 1f) "Camera2 (wide zoom)" else "Camera2 (standard lens)"
             if (zoom < 1f) camHFov = Math.toDegrees(2.0 * Math.atan(Math.tan(Math.toRadians(camHFov / 2.0)) / zoom.toDouble()))
             val map = ch.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             val sizes = map?.getOutputSizes(ImageFormat.YUV_420_888)
@@ -1079,7 +1107,7 @@ class MainActivity : Activity(), SensorEventListener {
                         if (now - camLastMs >= 38L) {
                             camLastMs = now
                             val jpg = yuvToJpeg(img)
-                            if (jpg != null) { camJpeg = jpg; camSeqN += 1; feedHands(jpg) }
+                            if (jpg != null) { camJpeg = jpg; camW = img.width; camH = img.height; camSeqN += 1; feedHands(jpg) }
                         }
                     } catch (e: Exception) {
                     } finally {
@@ -1217,9 +1245,9 @@ class MainActivity : Activity(), SensorEventListener {
                     .setBaseOptions(base)
                     .setRunningMode(RunningMode.VIDEO)
                     .setNumHands(2)
-                    .setMinHandDetectionConfidence(0.5f)
-                    .setMinHandPresenceConfidence(0.5f)
-                    .setMinTrackingConfidence(0.5f)
+                    .setMinHandDetectionConfidence(0.4f)
+                    .setMinHandPresenceConfidence(0.4f)
+                    .setMinTrackingConfidence(0.4f)
                     .build()
                 landmarker = HandLandmarker.createFromOptions(this@MainActivity, opts)
                 handsState = if (handsWanted) "on" else "off"

@@ -1,5 +1,5 @@
 'use strict';
-/* SpatialOS apps: Home, Dock, Keyboard, Settings, Notes, Photos, Music, Sketch, Calculator, Clock, Environments, Store, Breathe, Compass */
+/* Orbit OS apps: Home, Dock, Keyboard, Settings, Notes, Photos, Music, Sketch, Calculator, Clock, Environments, Store, Breathe, Compass */
 (function () {
   const SOS = window.SOS, S = SOS.settings, U = SOS.util, FONT = SOS.FONT;
   const clamp = U.clamp, rr = U.rr;
@@ -86,13 +86,13 @@
 
   /* ---------- Home (floating icons, left tab bar, page dots) ---------- */
   reg({
-    id: 'home', w: 1180, h: 740, chrome: false, glass: false, dist: 2.4,
+    id: 'home', w: 1180, h: 800, chrome: false, glass: false, dist: 2.4,
     create(win) { win.state = { page: 0 }; },
     draw(ui, win) {
       const c = ui.c, st = win.state, list = homeList(), per = 13, pages = Math.max(1, Math.ceil(list.length / per));
       if (st.page >= pages) st.page = pages - 1;
       // left tab bar: a tall glass pill, vertically centred on the grid
-      const tx = 112, ty = 370, tabs = [['apps', null], ['env', 'env'], ['spiral', 'chat']];
+      const tx = 112, ty = 455, tabs = [['apps', null], ['env', 'env']].concat(S.spiral ? [['spiral', 'chat']] : []);
       const ph = 62 * tabs.length + 34; ui.rect(tx - 44, ty - ph / 2, 88, ph, 44, 'rgba(38,40,48,.66)', 'rgba(255,255,255,.18)', 1.5);
       tabs.forEach(function (t, i) {
         const y = ty - ph / 2 + 17 + 31 + i * 62, id = 'tab_' + t[0], hv = ui.hover(id);
@@ -101,8 +101,13 @@
         (t[0] === 'apps' ? ICONS.apps : t[0] === 'env' ? ICONS.target : ICONS.spiral)(c, tx, y, t[0] === 'spiral' ? 21 : 22);
         if (hv) ui.text(t[0] === 'apps' ? 'Apps' : t[0] === 'env' ? 'Environments' : 'Spiral', tx + 58, y, { size: 24, weight: 700, color: '#fff', shadow: true });
       });
+      // header: big clock, date and the Orbit mark
+      const dtn = new Date(), hh = String(dtn.getHours()).padStart(2, '0'), mn = String(dtn.getMinutes()).padStart(2, '0');
+      ui.text(hh + ':' + mn, 660, 66, { size: 74, align: 'center', weight: 300, color: '#fff', shadow: true });
+      ui.text(dtn.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' }), 660, 124, { size: 24, align: 'center', weight: 500, color: 'rgba(255,255,255,.85)', shadow: true });
+      if (window.OrbitLogo) { try { window.OrbitLogo(c, 1090, 70, 30, 1.2, 0.95); } catch (e) {} }
       // icons
-      const sp = 206, rowStep = 168, cx0 = 660, cy0 = 370 - rowStep, R = 62, sub = list.slice(st.page * per, st.page * per + per);
+      const sp = 206, rowStep = 168, cx0 = 660, cy0 = 455 - rowStep, R = 62, sub = list.slice(st.page * per, st.page * per + per);
       let n = 0;
       HOME_ROWS.forEach(function (cnt, ri) {
         const y = cy0 + ri * rowStep;
@@ -118,8 +123,8 @@
       });
       // page dots
       if (pages > 1) for (let p = 0; p < pages; p++) {
-        const x = cx0 + (p - (pages - 1) / 2) * 34, id = 'pg' + p; ui.hit(id, x - 17, 668, 34, 40, { onClick: function () { st.page = p; win.dirty = true; } });
-        c.fillStyle = p === st.page ? '#fff' : 'rgba(255,255,255,.4)'; c.beginPath(); c.arc(x, 688, p === st.page ? 7 : 6, 0, 7); c.fill();
+        const x = cx0 + (p - (pages - 1) / 2) * 34, id = 'pg' + p; ui.hit(id, x - 17, 732, 34, 40, { onClick: function () { st.page = p; win.dirty = true; } });
+        c.fillStyle = p === st.page ? '#fff' : 'rgba(255,255,255,.4)'; c.beginPath(); c.arc(x, 752, p === st.page ? 7 : 6, 0, 7); c.fill();
       }
     }
   });
@@ -127,7 +132,7 @@
   /* ---------- Dock ---------- */
   const ENVS = ['night', 'sunset', 'studio', 'passthrough'], ENV_NAMES = { passthrough: 'Camera', sunset: 'Sunset Dunes', night: 'Moonlight', studio: 'Studio' };
   reg({
-    id: 'dock', w: 600, h: 130, chrome: false, radius: 65, dist: 2.0,
+    id: 'dock', w: 650, h: 140, chrome: false, radius: 70, dist: 2.0,
     draw(ui, win) {
       const c = ui.c, items = [
         ['home', 'Home', function () { SOS.toggleHome(); }, false],
@@ -137,49 +142,70 @@
         ['settings', 'Settings', function () { SOS.open('settings'); }, false]
       ];
       items.forEach(function (it, i) {
-        const x = 75 + i * 112, y = 56, id = 'd_' + it[0], hv = ui.hover(id);
-        ui.hit(id, x - 46, y - 46, 92, 92, { onClick: it[2] });
-        c.fillStyle = hv ? 'rgba(255,255,255,.3)' : 'rgba(255,255,255,.1)'; c.beginPath(); c.arc(x, y, hv ? 44 : 40, 0, 7); c.fill();
+        const x = 85 + i * 120, y = 60, id = 'd_' + it[0], hv = ui.hover(id);
+        ui.hit(id, x - 58, y - 56, 116, 128, { onClick: it[2] });
+        c.fillStyle = hv ? 'rgba(130,175,255,.45)' : 'rgba(255,255,255,.10)'; c.beginPath(); c.arc(x, y, hv ? 47 : 42, 0, 7); c.fill();
+        if (hv) { c.strokeStyle = 'rgba(200,220,255,.9)'; c.lineWidth = 3; c.beginPath(); c.arc(x, y, 49, 0, 7); c.stroke(); }
         if (it[0] === 'env') ICONS.env(c, x, y, 26); else if (it[0] === 'settings') ICONS.settings(c, x, y, 26); else ICONS[it[0]](c, x, y, 34);
         if (it[0] === 'hand') { c.fillStyle = it[3] ? '#30d158' : '#ff453a'; c.beginPath(); c.arc(x + 28, y - 28, 7, 0, 7); c.fill(); }
-        ui.text(it[1], x, 112, { size: 17, align: 'center', color: hv ? '#fff' : WHITE2, weight: 600 });
+        ui.text(it[1], x, 120, { size: 19, align: 'center', color: hv ? '#fff' : WHITE2, weight: 600 });
       });
     }
   });
 
   /* ---------- Keyboard ---------- */
-  const KB_ROWS = [['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'], ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'], ['SHIFT', 'z', 'x', 'c', 'v', 'b', 'n', 'm', 'Backspace'], ['SYM', ' ', 'MIC', 'Enter']];
-  const KB_SYM = [['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'], ['-', '/', ':', ';', '(', ')', '$', '&', '@'], ['SHIFT', '.', ',', '?', '!', '\'', '"', '#', 'Backspace'], ['SYM', ' ', 'MIC', 'Enter']];
+  const KB_ROWS = [['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'], ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'], ['SHIFT', 'z', 'x', 'c', 'v', 'b', 'n', 'm', 'Backspace'], ['SYM', ',', ' ', '.', 'MIC', 'Enter']];
+  const KB_SYM = [['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'], ['-', '/', ':', ';', '(', ')', '$', '&', '@'], ['SHIFT', '#', '%', '?', '!', '\'', '"', '_', 'Backspace'], ['SYM', ',', ' ', '.', 'MIC', 'Enter']];
+  // Orbit keyboard: big keys, no dead gaps (the touch area of every key reaches halfway into the gap), pop-up letter bubble, text preview, hold backspace to repeat
   reg({
-    id: 'keyboard', w: 1100, h: 400, chrome: false, radius: 44, dist: 1.7, tilt: -0.28,
-    create(win) { win.state = { shift: false, sym: false, flash: null }; },
+    id: 'keyboard', w: 1500, h: 560, chrome: false, radius: 52, dist: 1.7, tilt: -0.28,
+    create(win) { win.state = { shift: false, sym: false, flash: null, bsT: 0, bsN: 0 }; },
     draw(ui, win) {
-      const st = win.state, c = ui.c, rows = st.sym ? KB_SYM : KB_ROWS, kh = 74, gap = 10, ky = 46;
-      ui.text(SOS.listening ? ('Listening… ' + (SOS.voicePartial || '')) : (SOS.kbFor ? (SOS.kbFor.app.title || 'Typing') : 'Keyboard'), 550, 22, { size: 20, align: 'center', color: WHITE2, weight: 600 });
+      const st = win.state, c = ui.c, rows = st.sym ? KB_SYM : KB_ROWS, kh = 98, gap = 9, ky = 98, W = 1500;
+      // preview bar: shows what is being typed so you never have to look away from the keyboard
+      const tgt = SOS.kbFor && SOS.kbFor.state, tx = tgt && typeof tgt.text === 'string' ? tgt.text : null;
+      ui.rect(40, 22, W - 80, 58, 29, 'rgba(255,255,255,.10)', 'rgba(255,255,255,.14)', 1.5);
+      let shown = SOS.listening ? ('Listening… ' + (SOS.voicePartial || '')) : (tx != null ? (tx.length > 44 ? '…' + tx.slice(-44) : tx) + (Math.floor(SOS.t * 2) % 2 ? '' : '|') : (SOS.kbFor ? (SOS.kbFor.app.title || 'Typing') : 'Keyboard'));
+      if (!shown) shown = Math.floor(SOS.t * 2) % 2 ? '' : '|';
+      ui.text(shown, 72, 51, { size: 28, color: tx != null && tx.length ? '#fff' : WHITE2, weight: 500 });
+      let pop = null;
       rows.forEach(function (row, ri) {
-        const base = 84, wide = 132;
-        const widths = row.map(function (k) { return k === 'SHIFT' || k === 'Backspace' ? wide : k === ' ' ? 440 : k === 'Enter' ? 200 : k === 'SYM' ? 160 : k === 'MIC' ? 130 : base; });
+        const base = 124, wide = 190;
+        const widths = row.map(function (k) { return k === 'SHIFT' || k === 'Backspace' ? wide : k === ' ' ? 484 : k === 'Enter' ? 220 : k === 'SYM' ? 170 : k === 'MIC' ? 150 : base; });
         const tw = widths.reduce(function (a, b) { return a + b; }, 0) + gap * (row.length - 1);
-        let x = (1100 - tw) / 2; const y = ky + ri * (kh + gap);
+        let x = (W - tw) / 2; const y = ky + ri * (kh + gap);
         row.forEach(function (k, i) {
-          const w = widths[i], id = 'k_' + k, hv = ui.hover(id), fl = st.flash && st.flash.k === k && SOS.t - st.flash.t < 0.18;
+          const w = widths[i], id = 'k_' + k, hv = ui.hover(id), dn = ui.down(id), fl = st.flash && st.flash.k === k && SOS.t - st.flash.t < 0.16;
           const special = k.length > 1 && k !== ' ';
-          ui.hit(id, x, y, w, kh, { onClick: function () {
+          ui.hit(id, x - gap / 2, y - gap / 2, w + gap, kh + gap, { onClick: function () {
             st.flash = { k: k, t: SOS.t };
             if (k === 'SHIFT') st.shift = !st.shift; else if (k === 'SYM') st.sym = !st.sym; else if (k === 'MIC') SOS.startVoice('type');
             else { const out = (k.length === 1 && st.shift && !st.sym) ? k.toUpperCase() : k; SOS.typeKey(out); if (st.shift && k.length === 1) st.shift = false; }
-            win.dirty = true;
+                        win.dirty = true;
           } });
-          ui.rect(x, y, w, kh, 22, fl ? 'rgba(255,255,255,.7)' : hv ? 'rgba(255,255,255,.34)' : special ? 'rgba(255,255,255,.12)' : 'rgba(255,255,255,.2)', 'rgba(255,255,255,.22)', 1.5);
-          let lab = k === 'Backspace' ? '⌫' : k === 'SHIFT' ? (st.shift ? '⇧•' : '⇧') : k === 'SYM' ? (st.sym ? 'ABC' : '123') : k === 'Enter' ? 'return' : k === ' ' ? 'space' : (st.shift && !st.sym ? k.toUpperCase() : k);
+          if (k === 'Backspace' && dn) {   // hold to repeat
+            if (!st.bsT) st.bsT = SOS.t; else if (SOS.t - st.bsT > 0.5 && SOS.t - (st.bsN || 0) > 0.07) { st.bsN = SOS.t; SOS.typeKey('Backspace'); }
+            win.dirty = true;
+          } else if (k === 'Backspace') st.bsT = 0;
+          const live = dn || fl;
+          ui.rect(x, y, w, kh, 26, live ? 'rgba(255,255,255,.82)' : hv ? 'rgba(130,175,255,.55)' : special ? 'rgba(255,255,255,.13)' : 'rgba(255,255,255,.22)', hv && !live ? 'rgba(190,215,255,.9)' : 'rgba(255,255,255,.24)', hv ? 3 : 1.5);
+          const up = (st.shift && !st.sym && k.length === 1) ? k.toUpperCase() : k;
+          let lab = k === 'Backspace' ? '⌫' : k === 'SHIFT' ? (st.shift ? '⇧•' : '⇧') : k === 'SYM' ? (st.sym ? 'ABC' : '123') : k === 'Enter' ? 'return' : k === ' ' ? 'space' : up;
           if (k === 'MIC') {
-            const mx = x + w / 2, my = y + kh / 2, on = SOS.listening; c.save(); c.strokeStyle = on ? '#ff453a' : '#fff'; c.fillStyle = on ? '#ff453a' : '#fff'; c.lineWidth = 3.4; c.lineCap = 'round';
-            rr(c, mx - 8, my - 22, 16, 30, 8); c.fill(); c.beginPath(); c.arc(mx, my - 4, 17, 0.15 * Math.PI, 0.85 * Math.PI); c.stroke(); c.beginPath(); c.moveTo(mx, my + 13); c.lineTo(mx, my + 24); c.stroke(); c.restore();
-          } else ui.text(lab, x + w / 2, y + kh / 2 + 1, { size: special || k === ' ' ? 26 : 34, align: 'center', weight: 600, color: fl ? '#111' : '#fff' });
+            const mx = x + w / 2, my = y + kh / 2, on = SOS.listening; c.save(); c.strokeStyle = on ? '#ff453a' : live ? '#111' : '#fff'; c.fillStyle = c.strokeStyle; c.lineWidth = 4; c.lineCap = 'round';
+            rr(c, mx - 9, my - 26, 18, 34, 9); c.fill(); c.beginPath(); c.arc(mx, my - 5, 20, 0.15 * Math.PI, 0.85 * Math.PI); c.stroke(); c.beginPath(); c.moveTo(mx, my + 15); c.lineTo(mx, my + 28); c.stroke(); c.restore();
+          } else ui.text(lab, x + w / 2, y + kh / 2 + 1, { size: special || k === ' ' ? 30 : 44, align: 'center', weight: 600, color: live ? '#0b0f1c' : '#fff' });
+          if ((hv || dn) && k.length === 1) pop = { x: x + w / 2, y: y, k: up };
           x += w + gap;
         });
       });
-      if (st.flash && SOS.t - st.flash.t < 0.2) win.dirty = true;
+      // magnified letter bubble above the key you are aiming at
+      if (pop) {
+        const bw = 112, bh = 104, bx = pop.x - bw / 2, by = Math.max(4, pop.y - bh - 6);
+        c.save(); c.shadowColor = 'rgba(0,0,0,.45)'; c.shadowBlur = 18; ui.rect(bx, by, bw, bh, 26, 'rgba(236,243,255,.96)', 'rgba(255,255,255,1)', 2); c.restore();
+        ui.text(pop.k, pop.x, by + bh / 2 + 2, { size: 64, align: 'center', weight: 700, color: '#0b0f1c' });
+      }
+      if (st.flash && SOS.t - st.flash.t < 0.18) win.dirty = true;
     }
   });
 
@@ -227,7 +253,7 @@
     const t = function (label, k, extra) { return { type: 'toggle', label: label, value: S[k], set: function () { set(k, !S[k]); if (extra) extra(); win.dirty = true; } }; };
     const sl = function (label, k, min, max, step, fmt, extra) { return { type: 'slider', label: label, value: S[k], min: min, max: max, step: step, fmt: fmt, set: function (v) { set(k, v); if (extra) extra(); win.dirty = true; } }; };
     const head = function (l) { return { type: 'head', label: l, h: 56 }; };
-    if (pane === 'general') return [head('SPACE'), t('Spiral assistant orb', 'spiral', function () { SOS.orbShow(S.spiral); }), t('Hey Spiral (always listening)', 'wake', function () { SOS.setWake(S.wake); }), t('Spiral speaks answers', 'speak'), { type: 'button', label: 'Gemini API key', note: 'Set or change the key Spiral uses', onClick: function () { SOS.open('gsetup', { bring: true }); } }, { type: 'button', label: 'Clear Spiral chats', note: 'Deletes saved conversations', onClick: function () { SOS.clearChats(); SOS.toast('Spiral chats cleared.', 2); } }, { type: 'button', label: 'Recenter view', note: 'Brings every app to you', onClick: function () { SOS.recenterAll(); } }, { type: 'button', label: 'Open Home', onClick: function () { SOS.toggleHome(); } },
+    if (pane === 'general') return [head('SPACE'), t('Assistant orb (optional, off by default)', 'spiral', function () { SOS.orbShow(S.spiral); }), t('Hey Spiral (always listening)', 'wake', function () { SOS.setWake(S.wake); }), t('Spiral speaks answers', 'speak'), { type: 'button', label: 'Gemini API key', note: 'Set or change the key Spiral uses', onClick: function () { SOS.open('gsetup', { bring: true }); } }, { type: 'button', label: 'Clear Spiral chats', note: 'Deletes saved conversations', onClick: function () { SOS.clearChats(); SOS.toast('Spiral chats cleared.', 2); } }, { type: 'button', label: 'Recenter view', note: 'Brings every app to you', onClick: function () { SOS.recenterAll(); } }, { type: 'button', label: 'Open Home', onClick: function () { SOS.toggleHome(); } },
       head('SYSTEM'), { type: 'button', label: 'Restore default settings', onClick: function () { SOS.resetSettings(); SOS.setEnv('passthrough'); SOS.setResScale(); win.dirty = true; } }, { type: 'button', label: 'Shut Down', color: '#ff453a', onClick: function () { SOS.quit(); } }];
     if (pane === 'display') return [head('LENSES'), sl('Eye distance', 'ipd', 54, 74, 1, function (v) { return v + ' mm'; }), sl('Lens spacing (fixes double view)', 'lensSep', 50, 76, 1, function (v) { return v + ' mm'; }), sl('Field of view', 'fov', 60, 100, 1, function (v) { return v + '°'; }), t('Lens distortion correction', 'distortion'), sl('Lens strength', 'lens', 0, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }),
       head('COMFORT'), t('Comfort vignette while turning', 'comfort'), t('Auto quality (keeps it smooth)', 'autoRes'), sl('Look-ahead (less lag)', 'predict', 0, 60, 5, function (v) { return v + ' ms'; }), { type: 'info', label: 'Frame rate', value: SOS.fps + ' fps' },
@@ -240,7 +266,7 @@
       const cs = SOS.camState, csTxt = cs === 'on' ? 'Live' : cs === 'asking' ? 'Asking for permission…' : cs === 'blocked' ? 'Blocked' : cs === 'error' ? 'Error' : 'Off';
       const rows = [head('SPACE'), { type: 'choice', label: 'Background', value: SOS.env, opts: ENVS.map(function (e) { return [e, e === 'passthrough' ? 'Camera' : ENV_NAMES[e].split(' ')[0]]; }), set: function (e) { SOS.setEnv(e); }, h: 130 },
         head('CAMERA'), { type: 'toggle', label: 'Use camera', value: cs === 'on', set: function () { if (SOS.camState === 'on') SOS.disableCamera(); else SOS.enableCamera(); win.dirty = true; } },
-        { type: 'info', label: 'Camera status', value: csTxt }, t('Room tracking (apps stay in the room)', 'world', function () { try { window.NativeBridge.setRoomTracking(S.world); } catch (e) {} SOS.toast('Restart the camera to apply. Room tracking uses the normal lens, not the wide one.', 4); }), sl('Camera brightness', 'bright', 0.5, 1.6, 0.05, function (v) { return Math.round(v * 100) + '%'; }), sl('Camera sync (stops apps swimming)', 'camSync', 0, 250, 10, function (v) { return v + ' ms'; }), sl('Camera view size', 'camZoom', 0.6, 1.4, 0.05, function (v) { return Math.round(v * 100) + '%'; })];
+        { type: 'info', label: 'Camera status', value: csTxt }, t('Room tracking (experimental, needs ARCore)', 'world', function () { try { window.NativeBridge.setRoomTracking(S.world); } catch (e) {} SOS.toast('Turn the camera off and on to apply.', 4); }), t('Wide lens (0.6x, if your phone allows it)', 'wide', function () { try { window.NativeBridge.setWideLens(S.wide); } catch (e) {} SOS.toast('Turn the camera off and on to apply.', 4); }), { type: 'info', label: 'Camera details', value: SOS.camDiag().split(' | ').slice(0, 3).join(' · ') }, sl('Camera brightness', 'bright', 0.5, 1.6, 0.05, function (v) { return Math.round(v * 100) + '%'; }), sl('Camera sync (stops apps swimming)', 'camSync', 0, 250, 10, function (v) { return v + ' ms'; }), sl('Camera view size', 'camZoom', 0.6, 1.4, 0.05, function (v) { return Math.round(v * 100) + '%'; })];
       if (cs === 'blocked' || cs === 'error') { rows.push({ type: 'button', label: 'Open Android app settings', note: 'Permissions > Camera > Allow', onClick: function () { try { window.NativeBridge.openAppSettings(); } catch (e) {} } }); }
       return rows;
     }
@@ -248,7 +274,7 @@
       head('CARDBOARD'), t('Magnet button', 'magnet'), sl('Magnet trigger', 'magnetT', 15, 120, 5, function (v) { return v + ' µT'; }, function () { SOS.pushNative(); }), { type: 'info', label: 'Touch button', value: 'Tap = select · Hold = Home' },
       head('GAZE'), t('Dwell to select', 'dwell'), sl('Dwell time', 'dwellT', 0.6, 3, 0.1, function (v) { return v.toFixed(1) + ' s'; })];
     if (pane === 'sound') return [head('AUDIO'), t('Interface sounds', 'sound'), sl('Volume', 'volume', 0, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }, function () { SOS.tick(1200, 0.08, 0.1); })];
-    return [head('SPATIALOS'), { type: 'info', label: 'Version', value: '2.1' }, { type: 'info', label: 'Frame rate', value: SOS.fps + ' fps' }, { type: 'info', label: 'Head tracking', value: SOS.nativeOK ? 'Gyroscope' : 'Mouse / keys' }, { type: 'info', label: 'Camera', value: SOS.camState === 'on' ? 'Live' : 'Off' }, { type: 'info', label: 'AR world tracking', value: (function () { try { return window.NativeBridge.arStatus(); } catch (e) { return 'n/a'; } })() },
+    return [head('ORBIT OS'), { type: 'info', label: 'Version', value: '3.0' }, { type: 'info', label: 'Frame rate', value: SOS.fps + ' fps' }, { type: 'info', label: 'Head tracking', value: SOS.nativeOK ? 'Gyroscope' : 'Mouse / keys' }, { type: 'info', label: 'Camera', value: SOS.camState === 'on' ? 'Live' : 'Off' }, { type: 'info', label: 'AR world tracking', value: (function () { try { return window.NativeBridge.arStatus(); } catch (e) { return 'n/a'; } })() },
       { type: 'info', label: 'Hands', value: !S.hands ? 'Off' : SOS.handsState }, { type: 'info', label: 'Open windows', value: String(Object.keys(SOS.wins).length) }];
   }
   SOS.apps.settings.tick = function (win) { if (win.state.pane === 'about' || win.state.pane === 'input' || win.state.pane === 'passthrough') { win._t = (win._t || 0) + 1; if (win._t % 20 === 0) win.dirty = true; } };
@@ -459,7 +485,7 @@
       c.save(); rr(c, hx, 100, win.w - hx * 2, 168, 34); c.clip(); const g = c.createLinearGradient(hx, 100, win.w - hx, 268); g.addColorStop(0, '#0a63ff'); g.addColorStop(0.55, '#6a5cff'); g.addColorStop(1, '#ff6aa8'); c.fillStyle = g; c.fillRect(hx, 100, win.w, 170);
       const rg = c.createRadialGradient(hx + 120, 120, 0, hx + 120, 120, 420); rg.addColorStop(0, 'rgba(255,255,255,.35)'); rg.addColorStop(1, 'rgba(255,255,255,0)'); c.fillStyle = rg; c.fillRect(hx, 100, win.w, 170); c.restore();
       c.save(); c.strokeStyle = 'rgba(255,255,255,.5)'; c.lineWidth = 2; rr(c, hx + 1, 101, win.w - hx * 2 - 2, 166, 34); c.stroke(); c.restore();
-      ui.text('FEATURED', hx + 40, 138, { size: 18, weight: 700, color: 'rgba(255,255,255,.8)' }); ui.text('Spatial Browser', hx + 40, 190, { size: 46, weight: 700 }); ui.text('The whole web, all around you. Say "Spiral, open browser".', hx + 40, 232, { size: 21, color: 'rgba(255,255,255,.88)' });
+      ui.text('FEATURED', hx + 40, 138, { size: 18, weight: 700, color: 'rgba(255,255,255,.8)' }); ui.text('Orbit Browser', hx + 40, 190, { size: 46, weight: 700 }); ui.text('The whole web, all around you.', hx + 40, 232, { size: 21, color: 'rgba(255,255,255,.88)' });
       ui.btn('feat', win.w - hx - 190, 168, 150, 54, { label: 'Open', size: 24, r: 27, fill: 'rgba(255,255,255,.3)', hoverFill: 'rgba(255,255,255,.5)', onClick: function () { SOS.open('browser', { bring: true }); } });
       if (ICONS.browser) { c.save(); c.shadowColor = 'rgba(0,0,0,.3)'; c.shadowBlur = 24; ICONS.browser(c, win.w - hx - 300, 184, 62); c.restore(); }
       // categories

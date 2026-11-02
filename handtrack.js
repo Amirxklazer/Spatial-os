@@ -9,6 +9,17 @@
   const slots = [null, null];
   const dist = function (a, b) { return Math.hypot(a.x - b.x, a.y - b.y); };
   let palmT = 0, palmCool = 0;
+  const clamp01 = function (x) { return Math.max(0, Math.min(1, x)); };
+  // One Euro filter: steady when the hand is still, fast and lag-free when it moves (a plain average is either jittery or laggy)
+  function OE(minC, beta, dC) { this.minC = minC; this.beta = beta; this.dC = dC; this.x = null; this.dx = 0; this.t = 0; }
+  OE.prototype.step = function (v, t) {
+    if (this.x === null) { this.x = v; this.t = t; return v; }
+    const dt = Math.max(0.005, Math.min(0.2, (t - this.t) / 1000)); this.t = t;
+    const al = function (c) { return 1 / (1 + (1 / (2 * Math.PI * c)) / dt); };
+    this.dx += ((v - this.x) / dt - this.dx) * al(this.dC);
+    this.x += (v - this.x) * al(this.minC + this.beta * Math.abs(this.dx));
+    return this.x;
+  };
 
   function parse(s) {
     const i = s.indexOf(';'); if (i < 0) return null;
@@ -27,7 +38,8 @@
       const curled = function (t, p) { return dist(h[t], h[0]) < dist(h[p], h[0]) * 1.08; };
       const indexOut = ext(8, 6), others = curled(12, 10) && curled(16, 14) && curled(20, 18);
       let open = 0; [[8, 6], [12, 10], [16, 14], [20, 18]].forEach(function (f) { if (ext(f[0], f[1])) open++; });
-      return { u: h[8].x, v: h[8].y, size: size, ratio: pd, point: indexOut && others, len: dist(h[8], h[5]) / size, open: open === 4 && pd > 0.8 };
+      const bl = clamp01((0.75 - pd) / 0.4), au = h[8].x + ((h[4].x + h[8].x) / 2 - h[8].x) * bl, av = h[8].y + ((h[4].y + h[8].y) / 2 - h[8].y) * bl;
+      return { u: au, v: av, size: size, ratio: pd, point: indexOut && others, len: dist(h[8], h[5]) / size, open: open === 4 && pd > 0.8 };
     });
     const used = [false, false];
     let palm = false;
@@ -37,9 +49,12 @@
       if (best < 0) { for (let i = 0; i < 2; i++) { if (!used[i] && (!slots[i] || now - slots[i].t >= 600)) { best = i; break; } } }
       if (best < 0) return;
       used[best] = true;
-      const s = slots[best] || { u: d.u, v: d.v, pinch: false, hist: [], tapCool: 0, tap: null };
-      const a = 0.6; s.u += (d.u - s.u) * a; s.v += (d.v - s.v) * a;
-      if (!s.pinch && d.ratio < 0.34) s.pinch = true; else if (s.pinch && d.ratio > 0.5) s.pinch = false;
+      if (slots[best] && now - slots[best].t >= 600) slots[best] = null;
+      const s = slots[best] || { u: d.u, v: d.v, pinch: false, pc: 0, hist: [], tapCool: 0, tap: null, fu: new OE(1.6, 14, 1), fv: new OE(1.6, 14, 1) };
+      s.u = s.fu.step(d.u, now); s.v = s.fv.step(d.v, now);
+      // pinch: needs two frames in a row to start or stop, so one noisy frame can no longer drop a drag or fire a click
+      if (!s.pinch) { s.pc = d.ratio < 0.38 ? s.pc + 1 : 0; if (s.pc >= 2) { s.pinch = true; s.pc = 0; } }
+      else { s.pc = d.ratio > 0.56 ? s.pc + 1 : 0; if (s.pc >= 2) { s.pinch = false; s.pc = 0; } }
       s.t = now;
       // poke / tap detection: only from a pointing pose. Either the fingertip dips quickly, or the finger foreshortens (pokes away from you).
       s.hist.push({ t: now, u: s.u, v: s.v, pt: d.point && !s.pinch, len: d.len });

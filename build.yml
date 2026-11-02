@@ -1,0 +1,95 @@
+name: Build Orbit OS APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # The runner already ships the Android SDK. Just make sure licenses are accepted (never fails the build).
+      - name: Accept Android licenses
+        continue-on-error: true
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      # Your repo is flat (no folders). This step builds the real Android folder layout from it.
+      - name: Arrange flat files into an Android project
+        run: |
+          set -e
+          P=app/src/main
+          mkdir -p app "$P/java/com/spatialos/cardboard" "$P/assets" "$P/res/mipmap-xxhdpi"
+
+          need() { [ -f "$1" ] || { echo "::error::Missing file in repo root: $1"; exit 1; }; }
+
+          for f in settings.gradle build.gradle gradle.properties app_build.gradle AndroidManifest.xml MainActivity.kt ic_launcher.png \
+                   index.html three.min.js core.js apps.js apps2.js apps3.js apps4.js spiral.js handtrack.js; do
+            need "$f"
+          done
+
+          cp app_build.gradle app/build.gradle
+          cp AndroidManifest.xml "$P/AndroidManifest.xml"
+          cp MainActivity.kt "$P/java/com/spatialos/cardboard/MainActivity.kt"
+          cp ic_launcher.png "$P/res/mipmap-xxhdpi/ic_launcher.png"
+
+          for f in index.html three.min.js core.js apps.js apps2.js apps3.js apps4.js spiral.js handtrack.js; do
+            cp "$f" "$P/assets/$f"
+          done
+
+          echo "Project layout:"; find app -type f | sort
+
+      # The hand-tracking model is downloaded here so you never have to upload it.
+      - name: Download hand tracking model
+        run: |
+          set -e
+          curl -fL --retry 4 --retry-delay 3 -o app/src/main/assets/hand_landmarker.task \
+            https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
+          ls -l app/src/main/assets/hand_landmarker.task
+
+      - name: Build debug APK
+        run: |
+          set +e
+          gradle assembleDebug --no-daemon --console=plain > build.log 2>&1
+          code=$?
+          echo "=================== ERRORS (copy from here) ==================="
+          grep -nE "^e: |error:|What went wrong|Could not |FAILED|Execution failed|Unresolved|Duplicate" -A6 build.log | head -70
+          echo "=================== END ==================="
+          exit $code
+
+      - name: Name the APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk OrbitOS.apk
+
+      - name: Upload APK (Actions artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: OrbitOS-apk
+          path: OrbitOS.apk
+
+      # Also attach the APK to a release so you get a direct .apk link (no zip) on your phone.
+      - name: Publish APK to the "latest" release
+        continue-on-error: true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-build
+          name: Orbit OS latest build
+          body: Newest debug APK from the last push.
+          files: OrbitOS.apk
+          make_latest: true

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<title>SpatialOS</title>
+<title>Orbit OS</title>
 <style>
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   #gl { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; background: #000; }
@@ -25,8 +25,8 @@
 
 <script>
 (function () {
-  /* ---------------- 20 second boot animation (stereo: one image per eye, centred on the lenses) ---------------- */
-  var BOOT_SECONDS = 20;
+  /* ---------------- 5 second boot animation (stereo: one image per eye, centred on the lenses) ---------------- */
+  var BOOT_SECONDS = 5;
   var cv = document.getElementById('boot'), cx = cv.getContext('2d', { willReadFrequently: true });
   var bootStatus = 'Starting…', bootProg = 0, bootWarn = '', bootFail = '', ready = false, started = false, t0 = performance.now();
   function status(t, p) { bootStatus = t; if (p != null) bootProg = p; }
@@ -50,42 +50,50 @@
 
   function text(c, s, x, y, size, alpha, weight, color, spacing) { if (alpha <= 0.01) return; c.save(); c.globalAlpha = alpha; c.fillStyle = color || '#fff'; c.font = (weight || 600) + ' ' + size + 'px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; try { c.letterSpacing = (spacing || 0) + 'px'; } catch (e) {} c.fillText(s, x, y); c.restore(); }
 
-  // flowing aurora ribbons behind the wordmark
-  function ribbons(c, ex, ey, u, t, a) {
+  // Orbit logo: glass sphere with a tilted ring that passes behind and in front of it, and a small satellite that circles it
+  function orbitLogo(c, x, y, r, t, a) {
     if (a <= 0.01) return;
-    c.save(); c.globalCompositeOperation = 'lighter'; c.lineCap = 'round';
-    var cols = ['rgba(70,130,255,', 'rgba(150,90,255,', 'rgba(60,210,255,'];
-    for (var k = 0; k < 7; k++) {
-      var col = cols[k % 3], ph = k * 0.9 + t * (0.32 + k * 0.03), amp = u * (26 + k * 9), yy = ey + (k - 3) * u * 11;
-      c.beginPath();
-      for (var i = 0; i <= 40; i++) { var f = i / 40, x = ex + (f - 0.5) * u * 520, env = Math.sin(f * Math.PI); var y = yy + Math.sin(f * 5 + ph) * amp * env * 0.6 + Math.sin(f * 9 - ph * 1.3) * amp * 0.18 * env; if (i) c.lineTo(x, y); else c.moveTo(x, y); }
-      c.strokeStyle = col + (0.22 * a) + ')'; c.lineWidth = u * 7; c.stroke();
-      c.strokeStyle = col + (0.5 * a) + ')'; c.lineWidth = Math.max(1, u * 1.6); c.stroke();
+    var tilt = -0.38, rx = r * 1.02, ry = r * 0.34, sr = r * 0.56;
+    function ringArc(from, to, lw, alpha) {
+      c.save(); c.translate(x, y); c.rotate(tilt);
+      var g = c.createLinearGradient(-rx, 0, rx, 0); g.addColorStop(0, 'rgba(94,231,255,' + alpha + ')'); g.addColorStop(0.5, 'rgba(79,123,255,' + alpha + ')'); g.addColorStop(1, 'rgba(155,107,255,' + alpha + ')');
+      c.strokeStyle = g; c.lineWidth = lw; c.lineCap = 'round'; c.beginPath(); c.ellipse(0, 0, rx, ry, 0, from, to); c.stroke(); c.restore();
     }
+    c.save(); c.globalAlpha = a;
+    var gl = c.createRadialGradient(x, y, r * 0.2, x, y, r * 2.1); gl.addColorStop(0, 'rgba(100,140,255,.30)'); gl.addColorStop(1, 'rgba(100,140,255,0)'); c.fillStyle = gl; c.fillRect(x - r * 2.2, y - r * 2.2, r * 4.4, r * 4.4);
+    ringArc(Math.PI, Math.PI * 2, r * 0.085, 0.55);                          // back half of the ring
+    var sg = c.createRadialGradient(x - sr * 0.35, y - sr * 0.4, sr * 0.1, x, y, sr);
+    sg.addColorStop(0, 'rgba(235,245,255,1)'); sg.addColorStop(0.28, 'rgba(130,175,255,1)'); sg.addColorStop(0.75, 'rgba(70,70,210,1)'); sg.addColorStop(1, 'rgba(36,30,120,1)');
+    c.fillStyle = sg; c.beginPath(); c.arc(x, y, sr, 0, 7); c.fill();
+    var hl = c.createRadialGradient(x - sr * 0.4, y - sr * 0.5, 0, x - sr * 0.4, y - sr * 0.5, sr * 0.5); hl.addColorStop(0, 'rgba(255,255,255,.75)'); hl.addColorStop(1, 'rgba(255,255,255,0)'); c.fillStyle = hl; c.beginPath(); c.arc(x, y, sr, 0, 7); c.fill();
+    ringArc(0, Math.PI, r * 0.105, 1);                                        // front half of the ring
+    var ang = t * 1.6, sx = Math.cos(ang) * rx, sy = Math.sin(ang) * ry, ca = Math.cos(tilt), sn = Math.sin(tilt);
+    var px = x + sx * ca - sy * sn, py = y + sx * sn + sy * ca;                // satellite
+    if (Math.sin(ang) > 0 || Math.hypot(px - x, py - y) > sr * 1.05) { c.shadowColor = 'rgba(160,220,255,.95)'; c.shadowBlur = r * 0.3; c.fillStyle = '#fff'; c.beginPath(); c.arc(px, py, r * 0.075, 0, 7); c.fill(); }
     c.restore();
   }
+  window.OrbitLogo = orbitLogo;
   // wordmark whose letters are revealed by a travelling band of light
   function wordmark(c, ex, ey, u, t) {
-    var a = ease((t - 2.2) / 2.2) * (1 - ease((t - 11) / 1.4)); if (a <= 0.01) return;
-    var size = u * 92, str = 'SPATIAL OS', sp = u * 14;
-    c.save(); c.font = '300 ' + size + 'px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'; try { c.letterSpacing = sp + 'px'; } catch (e) {}
-    var w = c.measureText(str).width, x0 = ex - w / 2, sweep = ((t - 3) * 0.28) % 1.6 - 0.3;
+    var a = ease((t - 1.2) / 1.2) * (1 - ease((t - 100) / 1)); if (a <= 0.01) return;
+    var size = u * 84, str = 'ORBIT OS', sp = u * 18;
+    c.save(); c.font = '300 ' + size + 'px system-ui, -apple-system, \"Segoe UI\", Roboto, sans-serif'; try { c.letterSpacing = sp + 'px'; } catch (e) {}
+    var w = c.measureText(str).width, x0 = ex - w / 2 + sp / 2, sweep = ((t - 1.6) * 0.5) % 1.6 - 0.3;
     c.textAlign = 'left'; c.textBaseline = 'middle'; c.globalAlpha = a;
     var g = c.createLinearGradient(x0, 0, x0 + w, 0);
     var s0 = clamp(sweep, 0, 1);
-    g.addColorStop(0, 'rgba(255,255,255,.62)'); g.addColorStop(clamp(s0 - 0.14, 0, 1), 'rgba(255,255,255,.62)'); g.addColorStop(s0, 'rgba(200,225,255,1)'); g.addColorStop(clamp(s0 + 0.14, 0, 1), 'rgba(255,255,255,.62)'); g.addColorStop(1, 'rgba(255,255,255,.62)');
-    c.shadowColor = 'rgba(120,160,255,.55)'; c.shadowBlur = u * 26;
+    g.addColorStop(0, 'rgba(255,255,255,.7)'); g.addColorStop(clamp(s0 - 0.14, 0, 1), 'rgba(255,255,255,.7)'); g.addColorStop(s0, 'rgba(190,225,255,1)'); g.addColorStop(clamp(s0 + 0.14, 0, 1), 'rgba(255,255,255,.7)'); g.addColorStop(1, 'rgba(255,255,255,.7)');
+    c.shadowColor = 'rgba(110,150,255,.55)'; c.shadowBlur = u * 22;
     c.fillStyle = g; c.fillText(str, x0, ey); c.restore();
-    text(c, 'spatial computing for Android', ex, ey + u * 84, u * 25, 0.55 * a * ease((t - 4.6) / 1.6), 400, '#fff', u * 4);
+    text(c, 'a floating world for your phone', ex, ey + u * 66, u * 24, 0.55 * a * ease((t - 2.2) / 1.2), 400, '#fff', u * 3);
   }
   function drawEye(c, ex, ey, u, t) {
-    ribbons(c, ex, ey, u, t, 0.55 * ease((t - 0.8) / 2.6) * (1 - ease((t - 10.6) / 1.6)));
-    wordmark(c, ex, ey, u, t);
-    // "Powered by Android" end card
-    var pa = ease((t - 12.8) / 1.6) * (1 - ease((t - 18.4) / 1.2));
-    text(c, 'Powered by', ex, ey - u * 78, u * 30, 0.95 * pa, 500);
-    text(c, 'Android', ex, ey + u * 8, u * 98, pa, 500, '#fff', -u * 2);
-    if (bootWarn) text(c, bootWarn, ex, ey + u * 250, u * 22, 0.95 * win(t, 5, 6, 19, 19.8), 500, '#ffd60a');
+    var pop = 0.82 + 0.18 * ease(t / 1.3);
+    orbitLogo(c, ex, ey - u * 80, u * 118 * pop, t, ease(t / 0.9));
+    wordmark(c, ex, ey + u * 84, u, t);
+    // progress line
+    var pa = ease((t - 0.6) / 0.8); if (pa > 0.01) { var lw = u * 260, ly = ey + u * 206; c.save(); c.globalAlpha = 0.55 * pa; c.fillStyle = 'rgba(255,255,255,.16)'; c.fillRect(ex - lw / 2, ly, lw, Math.max(2, u * 4)); var gg = c.createLinearGradient(ex - lw / 2, 0, ex + lw / 2, 0); gg.addColorStop(0, '#5ee7ff'); gg.addColorStop(1, '#9b6bff'); c.fillStyle = gg; c.fillRect(ex - lw / 2, ly, lw * Math.max(0.04, Math.min(1, bootProg, t / BOOT_SECONDS)), Math.max(2, u * 4)); c.restore(); }
+    if (bootWarn) text(c, bootWarn, ex, ey + u * 256, u * 21, 0.95 * win(t, 1.5, 2.2, 99, 100), 500, '#ffd60a');
   }
   function frame() {
     var t = (performance.now() - t0) / 1000, c = cv.getContext('2d'), W = cv.width, H = cv.height;
@@ -96,7 +104,7 @@
     c.globalAlpha = fade; drawEye(c, W / 2 - sep / 2, ey, u, t); drawEye(c, W / 2 + sep / 2, ey, u, t); c.globalAlpha = 1;
     if (t >= BOOT_SECONDS) {
       if (ready && !started) { begin(); return; }
-      if (!ready) { [W / 2 - sep / 2, W / 2 + sep / 2].forEach(function (x) { text(c, bootStatus || 'Almost there…', x, ey, u * 30, 0.8, 500); }); }
+      if (!ready) { [W / 2 - sep / 2, W / 2 + sep / 2].forEach(function (x) { text(c, bootStatus || 'Almost there…', x, ey + u * 256, u * 26, 0.8, 500); }); }
     }
     requestAnimationFrame(frame);
   }

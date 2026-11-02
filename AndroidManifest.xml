@@ -22,7 +22,7 @@
         android:hardwareAccelerated="true"
         android:largeHeap="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="SpatialOS"
+        android:label="Orbit OS"
         android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
 
         <meta-data android:name="com.google.ar.core" android:value="optional" />
