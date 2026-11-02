@@ -34,6 +34,15 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import com.google.ar.core.ArCoreApk
+import android.opengl.EGL14
+import android.opengl.EGLConfig
+import android.opengl.GLES11Ext
+import android.opengl.GLES20
+import android.media.AudioManager
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import java.net.HttpURLConnection
+import java.net.URL
 import org.json.JSONObject
 import android.os.HandlerThread
 import android.os.SystemClock
@@ -186,46 +195,54 @@ class MainActivity : Activity(), SensorEventListener {
         else web.evaluateJavascript("window.SOS && SOS.onCamPerm($ok)", null)
     }
 
-    // ---- spatial browser: an offscreen WebView rendered to JPEG frames ----
-    private var bweb: WebView? = null
-    private var bBmp: Bitmap? = null
-    @Volatile private var bJpeg: ByteArray? = null
-    @Volatile private var bSeq = 0
-    @Volatile private var bInfo = "{}"
-    private var bW = 1280
-    private var bH = 720
-    private var bActive = false
-    private var bDown = 0L
-    private val bHandler = Handler(Looper.getMainLooper())
-    private val bOut = ByteArrayOutputStream(120000)
-    private var bProgress = 100
-    private val bTick = object : Runnable {
-        override fun run() {
-            if (!bActive) return
-            try {
-                val w = bweb
-                val bmp = bBmp
-                if (w != null && bmp != null) {
-                    val c = android.graphics.Canvas(bmp)
-                    c.drawColor(Color.WHITE)
-                    w.draw(c)
-                    bOut.reset()
-                    bmp.compress(Bitmap.CompressFormat.JPEG, 68, bOut)
-                    bJpeg = bOut.toByteArray()
-                    bSeq += 1
-                    bInfo = "{\"url\":" + JSONObject.quote(w.url ?: "") + ",\"title\":" + JSONObject.quote(w.title ?: "") + ",\"p\":" + bProgress + ",\"back\":" + w.canGoBack() + ",\"fwd\":" + w.canGoForward() + "}"
+    // ---- spatial browsers: up to 3 offscreen WebViews, each rendered to JPEG frames ----
+    inner class BrowserInst(val id: Int) {
+        var web: WebView? = null
+        var bmp: Bitmap? = null
+        @Volatile var jpeg: ByteArray? = null
+        @Volatile var seq = 0
+        @Volatile var info = "{}"
+        var w = 1280
+        var h = 720
+        var active = false
+        @Volatile var visible = true
+        var down = 0L
+        var progress = 100
+        val out = ByteArrayOutputStream(120000)
+        val handler = Handler(Looper.getMainLooper())
+        val tick = object : Runnable {
+            override fun run() {
+                if (!active) return
+                try {
+                    val v = web
+                    val bm = bmp
+                    if (v != null && bm != null) {
+                        if (visible || seq == 0) {
+                            val c = android.graphics.Canvas(bm)
+                            c.drawColor(Color.WHITE)
+                            v.draw(c)
+                            out.reset()
+                            bm.compress(Bitmap.CompressFormat.JPEG, 66, out)
+                            jpeg = out.toByteArray()
+                            seq += 1
+                        }
+                        info = "{\"url\":" + JSONObject.quote(v.url ?: "") + ",\"title\":" + JSONObject.quote(v.title ?: "") + ",\"p\":" + progress + ",\"back\":" + v.canGoBack() + ",\"fwd\":" + v.canGoForward() + "}"
+                    }
+                } catch (e: Throwable) {
                 }
-            } catch (e: Throwable) {
+                handler.postDelayed(this, if (visible) 120L else 600L)
             }
-            bHandler.postDelayed(this, 110L)
         }
     }
 
-    private fun browserStartNow(w: Int, h: Int) {
+    private val browsers = HashMap<Int, BrowserInst>()
+
+    private fun browserStartNow(id: Int, w: Int, h: Int) {
         try {
-            bW = w.coerceIn(640, 1600)
-            bH = h.coerceIn(360, 900)
-            if (bweb == null) {
+            val bi = browsers.getOrPut(id) { BrowserInst(id) }
+            bi.w = w.coerceIn(640, 1600)
+            bi.h = h.coerceIn(360, 900)
+            if (bi.web == null) {
                 val b = WebView(this)
                 b.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
                 b.isFocusable = false
@@ -238,69 +255,74 @@ class MainActivity : Activity(), SensorEventListener {
                 s.loadWithOverviewMode = true
                 s.setSupportZoom(false)
                 s.builtInZoomControls = false
-                s.mediaPlaybackRequiresUserGesture = true
+                s.mediaPlaybackRequiresUserGesture = false
                 s.userAgentString = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
                 b.webViewClient = object : WebViewClient() {
                     override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-                        window.decorView.post { browserStopNow(); bweb = null }
+                        window.decorView.post { browserStopNow(id) }
                         return true
                     }
                 }
                 b.webChromeClient = object : WebChromeClient() {
-                    override fun onProgressChanged(view: WebView, newProgress: Int) { bProgress = newProgress }
+                    override fun onProgressChanged(view: WebView, newProgress: Int) { bi.progress = newProgress }
                 }
-                root.addView(b, 0, FrameLayout.LayoutParams(bW, bH))
-                bweb = b
+                root.addView(b, 0, FrameLayout.LayoutParams(bi.w, bi.h))
+                bi.web = b
             }
-            val old = bBmp
-            if (old == null || old.width != bW || old.height != bH) {
-                bBmp = Bitmap.createBitmap(bW, bH, Bitmap.Config.RGB_565)
+            val old = bi.bmp
+            if (old == null || old.width != bi.w || old.height != bi.h) {
+                bi.bmp = Bitmap.createBitmap(bi.w, bi.h, Bitmap.Config.RGB_565)
             }
-            bweb?.layoutParams = FrameLayout.LayoutParams(bW, bH)
-            bweb?.onResume()
-            bActive = true
-            bHandler.removeCallbacks(bTick)
-            bHandler.post(bTick)
+            bi.web?.layoutParams = FrameLayout.LayoutParams(bi.w, bi.h)
+            bi.web?.onResume()
+            bi.active = true
+            bi.handler.removeCallbacks(bi.tick)
+            bi.handler.post(bi.tick)
         } catch (e: Throwable) {
-            bInfo = "{\"error\":true}"
+            browsers[id]?.info = "{\"error\":true}"
         }
     }
 
-    private fun browserStopNow() {
-        bActive = false
-        bHandler.removeCallbacks(bTick)
-        try { bweb?.onPause() } catch (e: Throwable) { }
+    private fun browserStopNow(id: Int) {
+        val bi = browsers.remove(id) ?: return
+        bi.active = false
+        bi.handler.removeCallbacks(bi.tick)
+        try {
+            val v = bi.web
+            if (v != null) { (v.parent as? ViewGroup)?.removeView(v); v.destroy() }
+        } catch (e: Throwable) { }
     }
 
-    private fun browserLoadNow(url: String) {
+    private fun browserLoadNow(id: Int, url: String) {
         var u = url.trim()
         if (u.isEmpty()) return
         val hasScheme = u.startsWith("http://") || u.startsWith("https://") || u.startsWith("file:") || u.startsWith("about:")
         if (!hasScheme) {
             u = if (u.contains(" ") || !u.contains(".")) "https://duckduckgo.com/?q=" + Uri.encode(u) else "https://$u"
         }
-        try { bweb?.loadUrl(u) } catch (e: Throwable) { }
+        try { browsers[id]?.web?.loadUrl(u) } catch (e: Throwable) { }
     }
 
-    private fun browserTouchNow(action: Int, x: Float, y: Float) {
-        val b = bweb ?: return
+    private fun browserTouchNow(id: Int, action: Int, x: Float, y: Float) {
+        val bi = browsers[id] ?: return
+        val b = bi.web ?: return
         try {
             val now = SystemClock.uptimeMillis()
-            if (action == 0) bDown = now
-            val ev = MotionEvent.obtain(bDown, now, action, x, y, 0)
+            if (action == 0) bi.down = now
+            val ev = MotionEvent.obtain(bi.down, now, action, x, y, 0)
             b.dispatchTouchEvent(ev)
             ev.recycle()
         } catch (e: Throwable) { }
     }
 
-    private fun browserTypeNow(text: String) {
-        val b = bweb ?: return
+    private fun browserTypeNow(id: Int, text: String) {
+        val b = browsers[id]?.web ?: return
         val js = "(function(t){var e=document.activeElement;if(e&&(e.tagName==='INPUT'||e.tagName==='TEXTAREA'||e.isContentEditable)){if(e.isContentEditable){document.execCommand('insertText',false,t);return;}var s=e.selectionStart||0,n=e.selectionEnd||0;e.value=e.value.slice(0,s)+t+e.value.slice(n);try{e.selectionStart=e.selectionEnd=s+t.length;}catch(x){}e.dispatchEvent(new Event('input',{bubbles:true}));}})(" + JSONObject.quote(text) + ")"
         b.evaluateJavascript(js, null)
     }
 
-    private fun browserKeyNow(name: String) {
-        val b = bweb ?: return
+    private fun browserKeyNow(id: Int, name: String) {
+        val b = browsers[id]?.web ?: return
         val js = if (name == "Backspace")
             "(function(){var e=document.activeElement;if(e&&(e.tagName==='INPUT'||e.tagName==='TEXTAREA')){var s=e.selectionStart||0,n=e.selectionEnd||0;if(n>s){e.value=e.value.slice(0,s)+e.value.slice(n);}else if(s>0){e.value=e.value.slice(0,s-1)+e.value.slice(s);s=s-1;}try{e.selectionStart=e.selectionEnd=s;}catch(x){}e.dispatchEvent(new Event('input',{bubbles:true}));}else if(e&&e.isContentEditable){document.execCommand('delete');}})()"
         else
@@ -308,15 +330,300 @@ class MainActivity : Activity(), SensorEventListener {
         b.evaluateJavascript(js, null)
     }
 
+    // ---- ARCore room tracking: gives the headset a position so apps can stay in the room while you walk ----
+    private var arSession: com.google.ar.core.Session? = null
+    private var arThread: Thread? = null
+    @Volatile private var arRun = false
+    @Volatile private var arTracking = false
+    @Volatile private var arWanted = true
+    @Volatile private var arHave = false
+    private var arInstallAsked = false
+    private val arPos = FloatArray(3)
+    @Volatile private var arPsi = 0f
+    private var arPsi0 = 0f
+    private var arPsiInit = false
+    private var arSx = 0f
+    private var arSy = 0f
+
+    private fun tryStartAr(): Boolean {
+        if (!arWanted) return false
+        try {
+            val av = ArCoreApk.getInstance().checkAvailability(this)
+            if (!av.isSupported) return false
+            if (av != ArCoreApk.Availability.SUPPORTED_INSTALLED) {
+                if (arInstallAsked) return false
+                arInstallAsked = true
+                val st = ArCoreApk.getInstance().requestInstall(this, true)
+                if (st != ArCoreApk.InstallStatus.INSTALLED) return false
+            }
+            val s = com.google.ar.core.Session(this)
+            val cfg = com.google.ar.core.Config(s)
+            cfg.updateMode = com.google.ar.core.Config.UpdateMode.LATEST_CAMERA_IMAGE
+            cfg.planeFindingMode = com.google.ar.core.Config.PlaneFindingMode.DISABLED
+            cfg.lightEstimationMode = com.google.ar.core.Config.LightEstimationMode.DISABLED
+            cfg.focusMode = com.google.ar.core.Config.FocusMode.AUTO
+            s.configure(cfg)
+            try {
+                val f = com.google.ar.core.CameraConfigFilter(s)
+                f.facingDirection = com.google.ar.core.CameraConfig.FacingDirection.BACK
+                val list = s.getSupportedCameraConfigs(f)
+                val pick = list.filter { it.imageSize.width <= 1280 }.maxByOrNull { it.imageSize.width * it.imageSize.height }
+                if (pick != null) s.cameraConfig = pick
+            } catch (e: Throwable) { }
+            // sensor orientation of the back camera (for turning the CPU image upright)
+            try {
+                val cm = getSystemService(CAMERA_SERVICE) as CameraManager
+                for (id in cm.cameraIdList) {
+                    val ch = cm.getCameraCharacteristics(id)
+                    if (ch.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK) { camSensor = ch.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90; break }
+                }
+            } catch (e: Throwable) { }
+            camFront = false
+            arSession = s
+            arRun = true
+            arTracking = false
+            arHave = false
+            arPsiInit = false
+            camState = "starting"
+            val t = Thread { arLoop(s) }
+            t.name = "arcore"
+            arThread = t
+            t.start()
+            return true
+        } catch (e: Throwable) {
+            arSession = null
+            return false
+        }
+    }
+
+    private fun arLoop(s: com.google.ar.core.Session) {
+        var dpy = EGL14.EGL_NO_DISPLAY
+        var ctx = EGL14.EGL_NO_CONTEXT
+        var surf = EGL14.EGL_NO_SURFACE
+        try {
+            dpy = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
+            val ver = IntArray(2)
+            EGL14.eglInitialize(dpy, ver, 0, ver, 1)
+            val attr = intArrayOf(EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT, EGL14.EGL_SURFACE_TYPE, EGL14.EGL_PBUFFER_BIT, EGL14.EGL_NONE)
+            val cfgs = arrayOfNulls<EGLConfig>(1)
+            val n = IntArray(1)
+            EGL14.eglChooseConfig(dpy, attr, 0, cfgs, 0, 1, n, 0)
+            ctx = EGL14.eglCreateContext(dpy, cfgs[0], EGL14.EGL_NO_CONTEXT, intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE), 0)
+            surf = EGL14.eglCreatePbufferSurface(dpy, cfgs[0], intArrayOf(EGL14.EGL_WIDTH, 1, EGL14.EGL_HEIGHT, 1, EGL14.EGL_NONE), 0)
+            EGL14.eglMakeCurrent(dpy, surf, surf, ctx)
+            val tex = IntArray(1)
+            GLES20.glGenTextures(1, tex, 0)
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, tex[0])
+            s.setCameraTextureName(tex[0])
+            s.setDisplayGeometry(Surface.ROTATION_90, 1280, 720)
+            s.resume()
+            val m = FloatArray(16)
+            var intrDone = false
+            while (arRun) {
+                val frame = s.update()
+                val cam = frame.camera
+                if (cam.trackingState == com.google.ar.core.TrackingState.TRACKING) {
+                    val pose = cam.pose
+                    pose.toMatrix(m, 0)
+                    // ARCore camera rotation (columns of m), and the sensor-based rotation in the same y-up three.js basis
+                    val ra = floatArrayOf(m[0], m[4], m[8], m[1], m[5], m[9], m[2], m[6], m[10])
+                    var p0 = 0f; var p1 = 0f; var p2 = 0f; var p3 = 0f; var p4 = 0f; var p5 = 0f; var p6 = 0f; var p7 = 0f; var p8 = 0f
+                    synchronized(poseArr) { p0 = poseArr[0]; p1 = poseArr[1]; p2 = poseArr[2]; p3 = poseArr[3]; p4 = poseArr[4]; p5 = poseArr[5]; p6 = poseArr[6]; p7 = poseArr[7]; p8 = poseArr[8] }
+                    if (poseValid) {
+                        val ri = floatArrayOf(p0, p1, p2, p6, p7, p8, -p3, -p4, -p5)
+                        // M = RA * RI^T : a rotation about the vertical axis = yaw between ARCore's world and the sensor world
+                        val m00 = ra[0] * ri[0] + ra[1] * ri[1] + ra[2] * ri[2]
+                        val m02 = ra[0] * ri[6] + ra[1] * ri[7] + ra[2] * ri[8]
+                        val psi = Math.atan2(m02.toDouble(), m00.toDouble()).toFloat()
+                        if (!arPsiInit) { arPsiInit = true; arPsi0 = psi; arSx = Math.sin((0f).toDouble()).toFloat(); arSy = 1f }
+                        // smooth the drift estimate (unit vector average avoids wrap-around problems)
+                        val d = psi - arPsi0
+                        arSx += (Math.sin(d.toDouble()).toFloat() - arSx) * 0.03f
+                        arSy += (Math.cos(d.toDouble()).toFloat() - arSy) * 0.03f
+                        arPsi = Math.atan2(arSx.toDouble(), arSy.toDouble()).toFloat()
+                        val c0 = Math.cos(arPsi0.toDouble()).toFloat()
+                        val s0 = Math.sin(arPsi0.toDouble()).toFloat()
+                        val tx = m[12]
+                        val tz = m[14]
+                        synchronized(arPos) { arPos[0] = c0 * tx - s0 * tz; arPos[1] = m[13]; arPos[2] = s0 * tx + c0 * tz }
+                        arHave = true
+                    }
+                    arTracking = true
+                } else {
+                    arTracking = false
+                }
+                try {
+                    val img = frame.acquireCameraImage()
+                    try {
+                        if (!intrDone) {
+                            val k = cam.imageIntrinsics
+                            val fx = k.focalLength[0]
+                            val w = k.imageDimensions[0]
+                            if (fx > 0f && w > 0) { camHFov = Math.toDegrees(2.0 * Math.atan(w / (2.0 * fx.toDouble()))); intrDone = true }
+                        }
+                        val now = SystemClock.uptimeMillis()
+                        if (now - camLastMs >= 38L) {
+                            camLastMs = now
+                            val jpg = yuvToJpeg(img)
+                            if (jpg != null) { camJpeg = jpg; camSeqN += 1; camState = "on"; feedHands(jpg) }
+                        }
+                    } finally {
+                        img.close()
+                    }
+                } catch (e: Throwable) { }
+                Thread.sleep(8)
+            }
+        } catch (e: Throwable) {
+            camErr = "ar: " + (e.message ?: "")
+            if (arRun) { camState = "error" }
+        } finally {
+            try { s.pause() } catch (e: Throwable) { }
+            try { s.close() } catch (e: Throwable) { }
+            try { if (dpy != EGL14.EGL_NO_DISPLAY) { EGL14.eglMakeCurrent(dpy, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT); if (surf != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(dpy, surf); if (ctx != EGL14.EGL_NO_CONTEXT) EGL14.eglDestroyContext(dpy, ctx); EGL14.eglTerminate(dpy) } } catch (e: Throwable) { }
+            arTracking = false
+            arHave = false
+        }
+    }
+
+    private fun stopAr() {
+        arRun = false
+        try { arThread?.join(1500) } catch (e: Throwable) { }
+        arThread = null
+        arSession = null
+        arHave = false
+    }
+
+    // ---- text to speech (Spiral talks) ----
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    private var ttsPending: String? = null
+    @Volatile private var speaking = false
+
+    private fun speakNow(text: String) {
+        runOnUiThread {
+            try {
+                if (tts == null) {
+                    ttsPending = text
+                    tts = TextToSpeech(this) { st ->
+                        if (st == TextToSpeech.SUCCESS) {
+                            ttsReady = true
+                            try { tts?.language = java.util.Locale.getDefault() } catch (e: Throwable) { }
+                            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                                override fun onStart(utteranceId: String?) { speaking = true }
+                                override fun onDone(utteranceId: String?) { speaking = false; if (wakeWanted) scheduleWake(700) }
+                                @Deprecated("deprecated") override fun onError(utteranceId: String?) { speaking = false; if (wakeWanted) scheduleWake(700) }
+                            })
+                            val p = ttsPending
+                            ttsPending = null
+                            if (p != null) tts?.speak(p, TextToSpeech.QUEUE_FLUSH, null, "sp")
+                        }
+                    }
+                } else if (ttsReady) {
+                    tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "sp")
+                } else ttsPending = text
+            } catch (e: Throwable) { }
+        }
+    }
+
+    // ---- "Hey Spiral": a listening loop that hands every phrase to the web side ----
+    @Volatile private var wakeWanted = false
+    @Volatile private var voiceBusy = false
+    private val wakeHandler = Handler(Looper.getMainLooper())
+    private val wakeRestart = Runnable { startWakeListen() }
+
+    private fun muteBeeps(m: Boolean) {
+        try {
+            val am = getSystemService(AUDIO_SERVICE) as AudioManager
+            val dir = if (m) AudioManager.ADJUST_MUTE else AudioManager.ADJUST_UNMUTE
+            am.adjustStreamVolume(AudioManager.STREAM_NOTIFICATION, dir, 0)
+            am.adjustStreamVolume(AudioManager.STREAM_SYSTEM, dir, 0)
+        } catch (e: Throwable) { }
+    }
+
+    private fun scheduleWake(delay: Long) {
+        wakeHandler.removeCallbacks(wakeRestart)
+        if (wakeWanted) wakeHandler.postDelayed(wakeRestart, delay)
+    }
+
+    private fun jsWake(text: String) {
+        val js = "window.SOS && SOS.onWake(" + JSONObject.quote(text) + ")"
+        runOnUiThread { try { web.evaluateJavascript(js, null) } catch (e: Exception) { } }
+    }
+
+    private fun startWakeListen() {
+        if (!wakeWanted) return
+        if (speaking || voiceBusy) { scheduleWake(900); return }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return
+        try {
+            if (!SpeechRecognizer.isRecognitionAvailable(this)) return
+            try { recognizer?.destroy() } catch (e: Exception) { }
+            val r = SpeechRecognizer.createSpeechRecognizer(this)
+            recognizer = r
+            r.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {}
+                override fun onBeginningOfSpeech() {}
+                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() {}
+                override fun onError(error: Int) { scheduleWake(if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 1500L else 350L) }
+                override fun onResults(results: Bundle?) {
+                    val l = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    if (l != null) { for (t in l) { if (t.lowercase().contains("spiral")) { jsWake(t); break } } }
+                    scheduleWake(300)
+                }
+                override fun onPartialResults(partialResults: Bundle?) {}
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            })
+            val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            i.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            r.startListening(i)
+        } catch (e: Throwable) { scheduleWake(2000) }
+    }
+
+    // ---- plain HTTPS POST for the Gemini API (kept off the web view so there is no CORS to fight) ----
+    private fun netPostNow(id: Int, url: String, headers: String, body: String) {
+        Thread {
+            var status = 0
+            var resp = ""
+            try {
+                val u = URL(url)
+                if (u.host != "generativelanguage.googleapis.com") throw Exception("blocked host")
+                val c = u.openConnection() as HttpURLConnection
+                c.requestMethod = "POST"
+                c.connectTimeout = 15000
+                c.readTimeout = 35000
+                c.doOutput = true
+                val h = JSONObject(headers)
+                val it = h.keys()
+                while (it.hasNext()) { val k = it.next(); c.setRequestProperty(k, h.getString(k)) }
+                c.outputStream.use { o -> o.write(body.toByteArray(Charsets.UTF_8)) }
+                status = c.responseCode
+                val st = if (status >= 400) c.errorStream else c.inputStream
+                resp = st?.bufferedReader(Charsets.UTF_8)?.use { r -> r.readText() } ?: ""
+            } catch (e: Exception) {
+                status = 0
+                resp = "{\"error\":{\"message\":" + JSONObject.quote(e.message ?: "network") + "}}"
+            }
+            val js = "window.SOS && SOS.onNetRes(" + id + "," + status + "," + JSONObject.quote(resp) + ")"
+            runOnUiThread { try { web.evaluateJavascript(js, null) } catch (e: Exception) { } }
+        }.start()
+    }
+
     // ---- voice input (Android speech recognizer) ----
     private var recognizer: SpeechRecognizer? = null
 
     private fun jsVoice(text: String, fin: Boolean, err: String) {
+        if (fin) { voiceBusy = false; if (wakeWanted) scheduleWake(800) }
         val js = "window.SOS && SOS.onVoice(" + JSONObject.quote(text) + "," + fin + "," + JSONObject.quote(err) + ")"
         runOnUiThread { try { web.evaluateJavascript(js, null) } catch (e: Exception) { } }
     }
 
     private fun startVoiceNow() {
+        voiceBusy = true
+        wakeHandler.removeCallbacks(wakeRestart)
         runOnUiThread {
             try {
                 if (!SpeechRecognizer.isRecognitionAvailable(this)) { jsVoice("", true, "unavailable"); return@runOnUiThread }
@@ -376,7 +683,8 @@ class MainActivity : Activity(), SensorEventListener {
         }
         var path = uri.path ?: "/"
         if (path == "/browser.jpg") {
-            val b = bJpeg ?: ByteArray(0)
+            val bid = (uri.getQueryParameter("id") ?: "1").toIntOrNull() ?: 1
+            val b = browsers[bid]?.jpeg ?: ByteArray(0)
             return WebResourceResponse("image/jpeg", null, 200, "OK", headers, ByteArrayInputStream(b))
         }
         if (path == "/cam.jpg") {
@@ -404,6 +712,7 @@ class MainActivity : Activity(), SensorEventListener {
             synchronized(poseArr) {
                 for (i in 0 until 9) { if (i > 0) sb.append(','); sb.append(poseArr[i]) }
             }
+            if (arHave) { synchronized(arPos) { sb.append(',').append(arPos[0]).append(',').append(arPos[1]).append(',').append(arPos[2]) }; sb.append(',').append(arPsi) }
             return sb.toString()
         }
 
@@ -480,18 +789,21 @@ class MainActivity : Activity(), SensorEventListener {
         }
 
         @JavascriptInterface
-        fun browserStart(w: Int, h: Int): Boolean { runOnUiThread { browserStartNow(w, h) }; return true }
+        fun browserStart(id: Int, w: Int, h: Int): Boolean { runOnUiThread { browserStartNow(id, w, h) }; return true }
 
         @JavascriptInterface
-        fun browserStop() { runOnUiThread { browserStopNow() } }
+        fun browserStop(id: Int) { runOnUiThread { browserStopNow(id) } }
 
         @JavascriptInterface
-        fun browserLoad(url: String) { runOnUiThread { browserLoadNow(url) } }
+        fun browserVisible(id: Int, v: Boolean) { browsers[id]?.visible = v }
 
         @JavascriptInterface
-        fun browserNav(cmd: String) {
+        fun browserLoad(id: Int, url: String) { runOnUiThread { browserLoadNow(id, url) } }
+
+        @JavascriptInterface
+        fun browserNav(id: Int, cmd: String) {
             runOnUiThread {
-                val b = bweb ?: return@runOnUiThread
+                val b = browsers[id]?.web ?: return@runOnUiThread
                 when (cmd) {
                     "back" -> if (b.canGoBack()) b.goBack()
                     "forward" -> if (b.canGoForward()) b.goForward()
@@ -502,22 +814,22 @@ class MainActivity : Activity(), SensorEventListener {
         }
 
         @JavascriptInterface
-        fun browserTouch(action: Int, x: Float, y: Float) { runOnUiThread { browserTouchNow(action, x, y) } }
+        fun browserTouch(id: Int, action: Int, x: Float, y: Float) { runOnUiThread { browserTouchNow(id, action, x, y) } }
 
         @JavascriptInterface
-        fun browserType(text: String) { runOnUiThread { browserTypeNow(text) } }
+        fun browserType(id: Int, text: String) { runOnUiThread { browserTypeNow(id, text) } }
 
         @JavascriptInterface
-        fun browserKey(name: String) { runOnUiThread { browserKeyNow(name) } }
+        fun browserKey(id: Int, name: String) { runOnUiThread { browserKeyNow(id, name) } }
 
         @JavascriptInterface
-        fun browserScroll(dy: Int) { runOnUiThread { bweb?.scrollBy(0, dy) } }
+        fun browserScroll(id: Int, dy: Int) { runOnUiThread { browsers[id]?.web?.scrollBy(0, dy) } }
 
         @JavascriptInterface
-        fun browserSeq(): Int = bSeq
+        fun browserSeq(id: Int): Int = browsers[id]?.seq ?: 0
 
         @JavascriptInterface
-        fun browserInfo(): String = bInfo
+        fun browserInfo(id: Int): String = browsers[id]?.info ?: "{}"
 
         @JavascriptInterface
         fun hasMicPermission(): Boolean =
@@ -538,10 +850,38 @@ class MainActivity : Activity(), SensorEventListener {
 
         @JavascriptInterface
         fun arStatus(): String {
+            if (arRun) return if (arTracking) "active" else "searching"
             return try {
                 val a = ArCoreApk.getInstance().checkAvailability(this@MainActivity)
                 if (a.isSupported) "supported" else if (a.isTransient) "checking" else "not supported"
             } catch (e: Throwable) { "unknown" }
+        }
+
+        @JavascriptInterface
+        fun setRoomTracking(on: Boolean) { arWanted = on }
+
+        @JavascriptInterface
+        fun netPost(id: Int, url: String, headers: String, body: String) { netPostNow(id, url, headers, body) }
+
+        @JavascriptInterface
+        fun speak(text: String) { speakNow(text) }
+
+        @JavascriptInterface
+        fun stopSpeak() { runOnUiThread { try { tts?.stop() } catch (e: Throwable) { }; speaking = false } }
+
+        @JavascriptInterface
+        fun startWake() { wakeWanted = true; runOnUiThread { muteBeeps(true); scheduleWake(200) } }
+
+        @JavascriptInterface
+        fun stopWake() { wakeWanted = false; runOnUiThread { wakeHandler.removeCallbacks(wakeRestart); muteBeeps(false); if (!voiceBusy) { try { recognizer?.destroy() } catch (e: Exception) { }; recognizer = null } } }
+
+        @JavascriptInterface
+        fun clipboardText(): String {
+            return try {
+                val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                val c = cm.primaryClip
+                if (c != null && c.itemCount > 0) c.getItemAt(0).coerceToText(this@MainActivity).toString() else ""
+            } catch (e: Throwable) { "" }
         }
 
         @JavascriptInterface
@@ -681,6 +1021,7 @@ class MainActivity : Activity(), SensorEventListener {
             camState = "error"; camErr = "no permission"; return false
         }
         camState = "starting"
+        if (tryStartAr()) return true
         try {
             val cm = getSystemService(CAMERA_SERVICE) as CameraManager
             val ids = cm.cameraIdList
@@ -720,8 +1061,8 @@ class MainActivity : Activity(), SensorEventListener {
             val map = ch.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             val sizes = map?.getOutputSizes(ImageFormat.YUV_420_888)
             if (sizes == null || sizes.isEmpty()) { camState = "error"; camErr = "no sizes"; return false }
-            var best = sizes.filter { it.width <= 1280 && it.height <= 960 && it.width * 3 == it.height * 4 }.maxByOrNull { it.width * it.height }
-            if (best == null) best = sizes.filter { it.width <= 1280 && it.height <= 960 }.maxByOrNull { it.width * it.height }
+            var best = sizes.filter { it.width <= 960 && it.height <= 720 && it.width * 3 == it.height * 4 }.maxByOrNull { it.width * it.height }
+            if (best == null) best = sizes.filter { it.width <= 960 && it.height <= 720 }.maxByOrNull { it.width * it.height }
             if (best == null) best = sizes.minByOrNull { it.width * it.height }!!
             val th = HandlerThread("cam")
             th.start()
@@ -735,7 +1076,7 @@ class MainActivity : Activity(), SensorEventListener {
                 if (img != null) {
                     try {
                         val now = SystemClock.uptimeMillis()
-                        if (now - camLastMs >= 30L) {
+                        if (now - camLastMs >= 38L) {
                             camLastMs = now
                             val jpg = yuvToJpeg(img)
                             if (jpg != null) { camJpeg = jpg; camSeqN += 1; feedHands(jpg) }
@@ -813,6 +1154,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun stopNativeCamera() {
+        stopAr()
         try { camSession?.close() } catch (e: Exception) { }
         try { camDev?.close() } catch (e: Exception) { }
         try { camReader?.close() } catch (e: Exception) { }
@@ -1003,14 +1345,14 @@ class MainActivity : Activity(), SensorEventListener {
         hideSystemUi()
         web.onResume()
         if (camWanted) startNativeCamera()
-        if (bActive) { bHandler.removeCallbacks(bTick); bHandler.post(bTick) }
+        for (bi in browsers.values) { if (bi.active) { bi.handler.removeCallbacks(bi.tick); bi.handler.post(bi.tick) } }
         rotSensor?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_FASTEST) }
         magSensor?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
     }
 
     override fun onPause() {
         if (camWanted) stopNativeCamera()
-        if (bActive) { bHandler.removeCallbacks(bTick) }
+        for (bi in browsers.values) { bi.handler.removeCallbacks(bi.tick) }
         sm.unregisterListener(this)
         web.onPause()
         super.onPause()

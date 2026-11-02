@@ -5,11 +5,11 @@
   const SOS = (window.SOS = { apps: {}, wins: {}, hands: [], env: 'passthrough', videoReady: false, video: null, t: 0, fps: 60, zc: 1, vidAspect: 16 / 9, yawRaw: 0, pitchRaw: 0 });
 
   /* ---------- settings ---------- */
-  const DEF = { ipd: 63, lensSep: 62, fov: 82, distortion: true, lens: 0.4, resScale: 0.7, autoRes: true, comfort: true, predict: 30, camSync: 110, camZoom: 1, theme: 'liquid', spiral: true, divider: true, winScale: 1, bright: 1, hands: false, palm: true, magnet: true, magnetT: 45, dwell: false, dwellT: 1.4, handCursor: false, volume: 0.7, sound: true, env: 'night', camera: false };
+  const DEF = { ipd: 63, lensSep: 62, fov: 82, distortion: true, lens: 0.4, resScale: 0.9, autoRes: true, comfort: true, predict: 30, camSync: 110, camZoom: 1, theme: 'liquid', spiral: true, divider: true, winScale: 1, bright: 1, hands: false, palm: true, magnet: true, magnetT: 45, dwell: false, dwellT: 1.4, handCursor: false, volume: 0.7, sound: true, env: 'night', camera: false, wake: false, speak: true, world: true, gmodel: 'gemini-flash-latest' };
   SOS.settings = Object.assign({}, DEF);
   try { Object.assign(SOS.settings, JSON.parse(localStorage.getItem('sos.settings') || '{}')); } catch (e) {}
   // v1.2 migration: hand tracking was the likely crash source, so it starts off again for everyone
-  try { if (localStorage.getItem('sos.v') !== '2.0') { SOS.settings.hands = false; SOS.settings.camera = false; SOS.settings.resScale = Math.min(SOS.settings.resScale, 0.7); SOS.settings.lens = 0.4; localStorage.setItem('sos.v', '2.0'); } } catch (e) {}
+  try { if (localStorage.getItem('sos.v') !== '2.1') { SOS.settings.hands = false; SOS.settings.camera = false; SOS.settings.resScale = 0.9; SOS.settings.lens = 0.4; localStorage.setItem('sos.v', '2.1'); } } catch (e) {}
   SOS.save = function () { try { localStorage.setItem('sos.settings', JSON.stringify(SOS.settings)); } catch (e) {} };
   SOS.resetSettings = function () { Object.assign(SOS.settings, DEF); SOS.save(); SOS.applySettings(); };
 
@@ -50,6 +50,9 @@
   const eyeCams = [new T.PerspectiveCamera(80, 1, 0.05, 120), new T.PerspectiveCamera(80, 1, 0.05, 120)];
   const headCam = new T.PerspectiveCamera(80, 1, 0.05, 120);
   SOS.scene = scene; SOS.headCam = headCam;
+  // everything that lives in the room goes in `world`; walking moves the world opposite to you, the eyes stay at the origin
+  const world = new T.Group(); scene.add(world); SOS.world = world; SOS.headPos = new T.Vector3(); const _lt = new T.Vector3();
+  SOS.dirYaw = function (w) { const d = w.mesh.position; return Math.atan2(-(d.x - SOS.headPos.x), -(d.z - SOS.headPos.z)); };
 
   const bgMat = new T.ShaderMaterial({
     uniforms: { map: { value: null }, uvS: { value: new T.Vector2(1, 1) }, bright: { value: 1 }, has: { value: 0 } },
@@ -75,9 +78,9 @@
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
     let cw = Math.max(64, Math.round(innerWidth * dpr)), ch = Math.max(64, Math.round(innerHeight * dpr));
-    if (cw > 1440) { ch = Math.round(ch * 1440 / cw); cw = 1440; } // a phone GPU cannot push native 1080p stereo with distortion smoothly: this is the main cause of dizziness
+    if (cw > 1600) { ch = Math.round(ch * 1600 / cw); cw = 1600; } // a phone GPU cannot push native 1080p stereo with distortion smoothly: this is the main cause of dizziness
     renderer.setSize(cw, ch, false);
-    W = Math.max(64, Math.round(cw * SOS.settings.resScale)); H = Math.max(64, Math.round(ch * SOS.settings.resScale));
+    const rs = Math.min(1, SOS.settings.resScale * (SOS.resAuto || 1)); W = Math.max(64, Math.round(cw * rs)); H = Math.max(64, Math.round(ch * rs));
     if (rt) rt.dispose();
     rt = new T.WebGLRenderTarget(W, H, { minFilter: T.LinearFilter, magFilter: T.LinearFilter, format: T.RGBAFormat, depthBuffer: true, stencilBuffer: false });
     distMat.uniforms.tex.value = rt.texture;
@@ -217,11 +220,18 @@
     const target = S.comfort ? clamp((speed - 0.9) / 2.2, 0, 1) * 0.75 : 0;
     vigNow += (target - vigNow) * 0.15; distMat.uniforms.vig.value = vigNow;
   }
+  const _hp = new T.Vector3(); let hpSet = false;
+  SOS.setHeadPos = function (x, y, z) {
+    _hp.set(x, y, z); if (!hpSet) { SOS.headPos.copy(_hp); hpSet = true; } else SOS.headPos.lerp(_hp, 0.6);
+    world.position.copy(SOS.headPos).negate(); world.updateMatrixWorld(true);
+  };
   function updatePose() {
     if (hasNative) {
       let s = ''; try { s = window.NativeBridge.pose(); } catch (e) {}
       if (s) {
         const p = s.split(',').map(Number);
+        if (p.length === 13 && p.every(isFinite)) { SOS.arYaw = p[12]; SOS.setHeadPos(p[9], p[10], p[11]); p.length = 9; }
+        else if (p.length === 12 && p.every(isFinite)) { SOS.setHeadPos(p[9], p[10], p[11]); p.length = 9; }
         if (p.length === 9 && p.every(isFinite)) {
           // R maps device->ENU world. three basis = M*R with M: x=E, y=U, z=-N
           tmpM.set(p[0], p[1], p[2], 0, p[6], p[7], p[8], 0, -p[3], -p[4], -p[5], 0, 0, 0, 0, 1);
@@ -235,7 +245,7 @@
     poseFilter();
     tmpV.set(0, 0, -1).applyQuaternion(rawQ);
     SOS.yawRaw = Math.atan2(-tmpV.x, -tmpV.z); SOS.pitchRaw = Math.asin(clamp(tmpV.y, -1, 1));
-    yawOffQ.setFromAxisAngle(new T.Vector3(0, 1, 0), yawOff);
+    yawOffQ.setFromAxisAngle(new T.Vector3(0, 1, 0), yawOff + (SOS.arYaw || 0));
     headQ.copy(yawOffQ).multiply(rawQ);
     headCam.quaternion.copy(headQ); headCam.position.set(0, 0, 0); headCam.updateMatrixWorld(true);
     const ipd = SOS.settings.ipd / 1000;
@@ -247,7 +257,7 @@
   }
   SOS.recenter = function () {
     tmpV.set(0, 0, -1).applyQuaternion(rawQ);
-    yawOff = -Math.atan2(-tmpV.x, -tmpV.z);
+    yawOff = -Math.atan2(-tmpV.x, -tmpV.z) - (SOS.arYaw || 0);
   };
   SOS.headDir = function () { return new T.Vector3(0, 0, -1).applyQuaternion(headQ); };
   SOS.headYawPitch = function () { const d = SOS.headDir(); return { yaw: Math.atan2(-d.x, -d.z), pitch: Math.asin(clamp(d.y, -1, 1)) }; };
@@ -258,14 +268,14 @@
   class Win {
     constructor(app, o) {
       o = o || {};
-      this.app = app; this.id = app.id; this.w = o.w || app.w || 1024; this.h = o.h || app.h || 640;
+      this.app = app; this.id = o.key || app.id; this.w = o.w || app.w || 1024; this.h = o.h || app.h || 640;
       this.chrome = app.chrome !== false; this.cw = this.w; this.ch = this.h + (this.chrome ? CHROME_H : 0);
       this.canvas = document.createElement('canvas'); this.canvas.width = this.cw; this.canvas.height = this.ch;
       this.ctx = this.canvas.getContext('2d');
       this.tex = new T.CanvasTexture(this.canvas); this.tex.minFilter = T.LinearFilter; this.tex.generateMipmaps = false;
       this.mat = new T.MeshBasicMaterial({ map: this.tex, transparent: true, depthWrite: false });
       this.mesh = new T.Mesh(new T.PlaneGeometry(this.cw / PPM, this.ch / PPM), this.mat);
-      this.mesh.userData.win = this; scene.add(this.mesh); winMeshes.push(this.mesh);
+      this.mesh.userData.win = this; world.add(this.mesh); this.o = (o.origin || SOS.headPos).clone(); winMeshes.push(this.mesh);
       this.yaw = o.yaw || 0; this.pitch = o.pitch || 0; this.dist = o.dist || 2.3; this.tilt = o.tilt || 0;
       this.hits = []; this.hovers = new Set(); this.downs = new Set(); this.dirty = true;
       this.scrollY = 0; this.maxScroll = 0; this.anim = 0; this.closing = false; this.z = ++SOS.zc; this.mesh.renderOrder = this.z;
@@ -274,9 +284,9 @@
       if (app.create) app.create(this);
     }
     place() {
-      const cp = Math.cos(this.pitch), d = this.dist, m = this.mesh;
-      m.position.set(-Math.sin(this.yaw) * cp * d, Math.sin(this.pitch) * d, -Math.cos(this.yaw) * cp * d);
-      m.lookAt(0, 0, 0); if (this.tilt) m.rotateX(this.tilt);
+      const cp = Math.cos(this.pitch), d = this.dist, m = this.mesh, o = this.o;
+      m.position.set(o.x - Math.sin(this.yaw) * cp * d, o.y + Math.sin(this.pitch) * d, o.z - Math.cos(this.yaw) * cp * d);
+      _lt.copy(o).add(world.position); m.lookAt(_lt); if (this.tilt) m.rotateX(this.tilt);
       m.updateMatrixWorld(true);
     }
     scaleNow() { return (this.dist / 2.3) * SOS.settings.winScale * (this.sc || 1) * (0.9 + 0.1 * ease(this.anim)); }
@@ -313,17 +323,35 @@
       ui.hit('__close', cx - 190, this.h + 16, 54, 54, { onClick: () => SOS.close(this.id) });
       c.fillStyle = xh ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.22)'; c.beginPath(); c.arc(cx - 163, y, 20, 0, 7); c.fill();
       c.strokeStyle = xh ? '#222' : 'rgba(255,255,255,.9)'; c.lineWidth = 3.2; c.lineCap = 'round'; c.beginPath(); c.moveTo(cx - 171, y - 8); c.lineTo(cx - 155, y + 8); c.moveTo(cx - 155, y - 8); c.lineTo(cx - 171, y + 8); c.stroke();
+      // size buttons: smaller / bigger
+      const self = this;
+      [['__smaller', cx + 136, -1], ['__bigger', cx + 200, 1]].forEach(function (b) {
+        const hv = self.hovers.has(b[0]); ui.hit(b[0], b[1] - 27, self.h + 16, 54, 54, { onClick: function () { SOS.setWinScale(self, (self.sc || 1) * (b[2] > 0 ? 1.15 : 1 / 1.15)); } });
+        c.fillStyle = hv ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.22)'; c.beginPath(); c.arc(b[1], y, 20, 0, 7); c.fill();
+        c.strokeStyle = hv ? '#222' : 'rgba(255,255,255,.9)'; c.lineWidth = 3.2; c.beginPath(); c.moveTo(b[1] - 8, y); c.lineTo(b[1] + 8, y); if (b[2] > 0) { c.moveTo(b[1], y - 8); c.lineTo(b[1], y + 8); } c.stroke();
+      });
+      // corner handle: pinch it and pull to resize
+      if (this.id !== 'keyboard' && this.id !== 'dock') {
+        const rh = this.hovers.has('__corner'), rd = this.downs.has('__corner');
+        ui.hit('__corner', this.w - 78, this.h + 8, 78, 70, { kind: 'resize', noDwell: true });
+        c.strokeStyle = rd ? '#fff' : rh ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.5)'; c.lineWidth = rh || rd ? 7 : 5;
+        c.beginPath(); c.moveTo(this.w - 20, this.h + 22); c.lineTo(this.w - 20, this.h + 56); c.lineTo(this.w - 54, this.h + 56); c.stroke();
+      }
       c.restore();
     }
   }
   SOS.Win = Win;
+  SOS.hooks = [];
+  const _zero = new T.Vector3();
+  SOS.firstWinDist = function (dir) { ray.set(_zero, dir); const l = winMeshes.filter(function (m) { const w = m.userData.win; return !w.closing && w.anim > 0.35 && m.visible && !w.app.ghost; }); const h = ray.intersectObjects(l, false); return h.length ? h[0].distance : Infinity; };
+  SOS.setWinScale = function (w, v) { w.sc = clamp(v, 0.5, 2.6); w.dirty = true; SOS.tick(900, 0.04, 0.04); };
 
   /* ---------- liquid glass + themes ---------- */
   const THEMES = {
-    liquid:   { name: 'Liquid',   base: 'rgba(28,36,58,.44)', a: 'rgba(170,205,255,.18)', b: 'rgba(120,150,255,.05)', glow: 'rgba(190,215,255,.10)' },
-    aurora:   { name: 'Aurora',   base: 'rgba(16,32,48,.48)', a: 'rgba(90,245,205,.20)',  b: 'rgba(160,100,255,.10)', glow: 'rgba(120,255,220,.10)' },
-    sunset:   { name: 'Sunset',   base: 'rgba(52,26,38,.48)', a: 'rgba(255,175,110,.22)', b: 'rgba(255,90,150,.10)',  glow: 'rgba(255,170,120,.10)' },
-    mint:     { name: 'Mint',     base: 'rgba(22,44,38,.48)', a: 'rgba(130,255,190,.20)', b: 'rgba(60,200,160,.08)',  glow: 'rgba(150,255,200,.10)' },
+    liquid:   { name: 'Liquid',   base: 'rgba(28,36,58,.62)', a: 'rgba(170,205,255,.18)', b: 'rgba(120,150,255,.05)', glow: 'rgba(190,215,255,.10)' },
+    aurora:   { name: 'Aurora',   base: 'rgba(16,32,48,.62)', a: 'rgba(90,245,205,.20)',  b: 'rgba(160,100,255,.10)', glow: 'rgba(120,255,220,.10)' },
+    sunset:   { name: 'Sunset',   base: 'rgba(52,26,38,.62)', a: 'rgba(255,175,110,.22)', b: 'rgba(255,90,150,.10)',  glow: 'rgba(255,170,120,.10)' },
+    mint:     { name: 'Mint',     base: 'rgba(22,44,38,.62)', a: 'rgba(130,255,190,.20)', b: 'rgba(60,200,160,.08)',  glow: 'rgba(150,255,200,.10)' },
     midnight: { name: 'Midnight', base: 'rgba(8,10,20,.84)',  a: 'rgba(90,110,255,.12)',  b: 'rgba(0,0,0,0)',         glow: 'rgba(110,130,255,.08)' },
     graphite: { name: 'Graphite', base: 'rgba(50,51,58,.88)', a: 'rgba(255,255,255,.07)', b: 'rgba(255,255,255,0)',   glow: 'rgba(255,255,255,.05)' }
   };
@@ -404,22 +432,24 @@
   SOS.open = function (id, o) {
     o = o || {};
     const app = SOS.apps[id]; if (!app) return null;
-    let w = SOS.wins[id];
+    const key = o.key || id;
+    let w = SOS.wins[key];
     const hp = SOS.headYawPitch();
     const angDist = function (a, b) { return Math.abs(((a - b + Math.PI * 3) % (Math.PI * 2)) - Math.PI); };
     if (w && w.closing) { w.closing = false; w.dirty = true; }
     if (w) {
       SOS.focus(w);
       // windows stay where they are; only fetch one that is far out of view (or when asked to)
-      if ((o.bring === true || (o.bring !== false && angDist(w.yaw, hp.yaw) > 0.9)) && id !== 'dock' && id !== 'keyboard') { w.yaw = hp.yaw; w.pitch = clamp(hp.pitch, -0.25, 0.25); w.place(); }
+      if ((o.bring === true || (o.bring !== false && angDist(SOS.dirYaw(w), hp.yaw) > 0.9)) && id !== 'dock' && id !== 'keyboard') { w.o.copy(SOS.headPos); w.yaw = hp.yaw; w.pitch = clamp(hp.pitch, -0.25, 0.25); w.place(); }
       return w;
     }
     let yaw = hp.yaw, pitch = clamp(hp.pitch, -0.2, 0.2);
-    if (id === 'home') yaw = hp.yaw + 0.3; // Home sits off to the left, not dead centre
+    if (id === 'home') yaw = hp.yaw;
     if (app.pitch != null) pitch = app.pitch;
     if (app.fixedYaw != null) yaw = app.fixedYaw;
-    w = new Win(app, { yaw: o.yaw != null ? o.yaw : yaw, pitch: o.pitch != null ? o.pitch : pitch, dist: o.dist || app.dist || 2.3, tilt: app.tilt || 0 });
-    SOS.wins[id] = w; SOS.focus(w);
+    w = new Win(app, { yaw: o.yaw != null ? o.yaw : yaw, pitch: o.pitch != null ? o.pitch : pitch, dist: o.dist || app.dist || 2.3, tilt: app.tilt || 0, key: key, origin: o.origin });
+    SOS.wins[key] = w; SOS.focus(w);
+    if (['home', 'dock', 'keyboard', 'toast'].indexOf(id) < 0 && SOS.wins.home && !SOS.wins.home.closing) SOS.close('home');
     if (app.onOpen) app.onOpen(w);
     return w;
   };
@@ -432,21 +462,21 @@
     SOS.tick(700, 0.05, 0.04);
   };
   function destroy(w) {
-    scene.remove(w.mesh); const i = winMeshes.indexOf(w.mesh); if (i >= 0) winMeshes.splice(i, 1);
+    world.remove(w.mesh); const i = winMeshes.indexOf(w.mesh); if (i >= 0) winMeshes.splice(i, 1);
     w.tex.dispose(); w.mat.dispose(); w.mesh.geometry.dispose(); delete SOS.wins[w.id];
   }
   SOS.toggleHome = function () {
     const h = SOS.wins.home;
     if (h && !h.closing) {
-      const hp = SOS.headYawPitch(); let dy = Math.abs(((h.yaw - hp.yaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+      const hp = SOS.headYawPitch(); let dy = Math.abs(((SOS.dirYaw(h) - hp.yaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
       if (dy < 0.5) { SOS.close('home'); return; }
     }
     SOS.open('home', { bring: true });
-    const hh = SOS.wins.home; if (hh) { const q = SOS.headYawPitch(); hh.yaw = q.yaw + 0.3; hh.pitch = clamp(q.pitch, -0.2, 0.2); hh.place(); }
+    const hh = SOS.wins.home; if (hh) { const q = SOS.headYawPitch(); hh.o.copy(SOS.headPos); hh.yaw = q.yaw; hh.pitch = clamp(q.pitch, -0.2, 0.2); hh.place(); const dk = SOS.wins.dock; if (dk) { dk.o.copy(SOS.headPos); dk.yaw = q.yaw; dk.pitch = hh.pitch - 0.6; dk.dist = hh.dist; dk.place(); } }
   };
   SOS.showKeyboard = function (w) {
     SOS.kbFor = w; const kb = SOS.open('keyboard', { exact: true, yaw: w.yaw, pitch: clamp(w.pitch - 0.46, -0.9, 0.2), dist: Math.max(1.6, w.dist - 0.4) });
-    kb.yaw = w.yaw; kb.pitch = clamp(w.pitch - 0.5, -0.9, 0.2); kb.dist = Math.max(1.6, w.dist - 0.4); kb.place(); kb.dirty = true; w.dirty = true;
+    kb.o.copy(w.o); kb.yaw = w.yaw; kb.pitch = clamp(w.pitch - 0.5, -0.9, 0.2); kb.dist = Math.max(1.6, w.dist - 0.4); kb.place(); kb.dirty = true; w.dirty = true;
   };
   SOS.hideKeyboard = function () { if (SOS.wins.keyboard) SOS.close('keyboard'); const w = SOS.kbFor; SOS.kbFor = null; if (w) w.dirty = true; };
   SOS.typeKey = function (k) { const w = SOS.kbFor; if (w && w.app.onKey) { w.app.onKey(w, k); w.dirty = true; } };
@@ -462,7 +492,7 @@
     ray.set(p.origin, p.dir);
     const list = winMeshes.filter(function (m) { const w = m.userData.win; return !w.closing && w.anim > 0.35 && m.visible && !w.app.ghost; });
     const hits = ray.intersectObjects(list, false);
-    p.hit = null;
+    p.hit = null; p.hitOrb = false;
     // pick nearest hit where the pixel is non-transparent-ish (inside window rect) -> take first hit; prefer highest z among near-equal
     for (let i = 0; i < hits.length; i++) {
       const h = hits[i], w = h.object.userData.win; if (!h.uv) continue;
@@ -472,6 +502,8 @@
       p.hit = { win: bw, uv: best.uv, point: best.point, dist: best.distance, px: px, py: py, el: bw.hitTest(px, py) };
       break;
     }
+    // the 3D Spiral orb is picked in front of windows when the ray touches it first
+    if (SOS.orbHit) { const od = SOS.orbHit(p); if (od > 0 && (!p.hit || od < p.hit.dist)) { p.hitOrb = true; p.hit = null; } }
   }
   function beginCarry(p, w, mode) {
     const cr = { win: w, p: p, mode: mode, dy: 0, dp: 0 };
@@ -487,6 +519,7 @@
   }
   function pDown(p) {
     if (SOS.carry && SOS.carry.mode === 'toggle' && !p.isHand) { endCarry(); return; }
+    if (p.hitOrb && p.isHand) { p.down = { orb: true, win: null, el: null, moved: false }; SOS.orbDown(p); return; }
     const h = p.hit; if (!h) { if (SOS.kbFor && !SOS.wins.keyboard) {} return; }
     const w = h.win, el = h.el; SOS.focus(w);
     p.down = { win: w, el: el, px: h.px, py: h.py, sy: w.scrollY, moved: false, t: SOS.t };
@@ -507,7 +540,14 @@
   function pMove(p) {
     const d = p.down; if (!d) return;
     const h = p.hit;
+    if (d.orb) return;
     if (d.carry) return;
+    if (d.el && d.el.kind === 'resize') {
+      // intersect the pointer ray with the window plane; scale follows how far the pointer is from the window centre
+      const w = d.win, m = w.mesh, nrm = new T.Vector3(0, 0, 1).applyQuaternion(m.quaternion), den = nrm.dot(p.dir);
+      if (Math.abs(den) > 0.05) { const tt = nrm.dot(_o.copy(m.position).sub(p.origin)) / den; if (tt > 0.2) { const pt = _d.copy(p.dir).multiplyScalar(tt).add(p.origin), dd = pt.distanceTo(m.position); if (!d.rz) d.rz = { d0: Math.max(0.2, dd), sc0: w.sc || 1 }; else SOS.setWinScale(w, d.rz.sc0 * dd / d.rz.d0); } }
+      return;
+    }
     if (!h || h.win !== d.win) return;
     const dy = h.py - d.py, dx = h.px - d.px;
     if (!d.moved && Math.hypot(dx, dy) > 22) d.moved = true;
@@ -517,6 +557,7 @@
   }
   function pUp(p) {
     const d = p.down; if (!d) return; p.down = null;
+    if (d.orb) { SOS.orbUp(p); return; }
     if (d.carry) {
       if (d.win.downs) d.win.downs.delete('__grab');
       const rz = SOS.resize;
@@ -532,6 +573,7 @@
   SOS.click = function () { clickWith(P.gaze); };
   function clickWith(p) {
     if (SOS.carry && SOS.carry.mode === 'toggle' && !p.isHand) { endCarry(); return; }
+    if (p.hitOrb) { SOS.orbClick(p); return; }
     if (!p.hit) { return; }
     pDown(p);
     const d = p.down; const h = p.hit;
@@ -584,7 +626,7 @@
         if (hd.tap && hd.tap.t !== p.lastTap && now - hd.tap.t < 400 && !p.pinch) {
           p.lastTap = hd.tap.t;
           const sd = p.dir.clone(); _d.set(hd.tap.ex * 2 - 1, 1 - hd.tap.ey * 2, 0.5).unproject(headCam).sub(headCam.position).normalize(); p.dir.copy(_d);
-          castPointer(p); if (p.hit) clickWith(p); p.dir.copy(sd);
+          castPointer(p); if (p.hit || p.hitOrb) clickWith(p); p.dir.copy(sd);
           _d.set(nx, ny, 0.5).unproject(headCam).sub(headCam.position).normalize(); p.dir.copy(_d);
         }
         // pinch edges
@@ -617,8 +659,8 @@
       const p = cr.p; if (!p.active) { endCarry(); }
       else {
         const d = p.dir, w = cr.win;
-        w.yaw = Math.atan2(-d.x, -d.z) + (cr.dy || 0); w.pitch = clamp(Math.asin(clamp(d.y, -1, 1)) + (cr.dp || 0), -1.2, 1.2); w.place();
-        if (SOS.kbFor === w && SOS.wins.keyboard) { const kb = SOS.wins.keyboard; kb.yaw = w.yaw; kb.pitch = clamp(w.pitch - 0.5, -0.9, 0.2); kb.place(); }
+        w.o.copy(SOS.headPos); w.yaw = Math.atan2(-d.x, -d.z) + (cr.dy || 0); w.pitch = clamp(Math.asin(clamp(d.y, -1, 1)) + (cr.dp || 0), -1.2, 1.2); w.place();
+        if (SOS.kbFor === w && SOS.wins.keyboard) { const kb = SOS.wins.keyboard; kb.o.copy(w.o); kb.yaw = w.yaw; kb.pitch = clamp(w.pitch - 0.5, -0.9, 0.2); kb.place(); }
       }
     }
     // two-hand resize
@@ -653,6 +695,7 @@
     SOS.t += dt;
     updatePose();
     updatePointers(dt);
+    if (SOS.hooks) for (let i = 0; i < SOS.hooks.length; i++) { try { SOS.hooks[i](dt); } catch (e) { console.error('hook', e); } }
     const toKill = [];
     for (const k in SOS.wins) {
       const w = SOS.wins[k];
@@ -691,11 +734,13 @@
     fAcc += dt; fN++;
     if (fAcc > 1) {
       SOS.fps = Math.round(fN / fAcc); fAcc = 0; fN = 0;
-      const S = SOS.settings; lowN = SOS.fps < 48 ? lowN + 1 : 0; hiN = SOS.fps >= 57 ? hiN + 1 : 0;
+      const S = SOS.settings; lowN = SOS.fps < 42 ? lowN + 1 : 0; hiN = SOS.fps >= 50 ? hiN + 1 : 0;
+      // auto quality only ever lowers a temporary multiplier (never your setting) and always climbs back when the frame rate is fine
+      SOS.resAuto = SOS.resAuto || 1;
       if (S.autoRes && !SOS.paused) {
-        if (lowN >= 2 && S.resScale > 0.42) { S.resScale = Math.round((S.resScale - 0.07) * 100) / 100; resize(); lowN = 0; SOS.autoResNote = true; }
-        else if (hiN >= 8 && S.resScale < SOS.resCeil) { S.resScale = Math.round((S.resScale + 0.04) * 100) / 100; resize(); hiN = 0; }
-      }
+        if (lowN >= 3 && SOS.resAuto > 0.72) { SOS.resAuto = Math.round((SOS.resAuto - 0.06) * 100) / 100; resize(); lowN = 0; }
+        else if (hiN >= 3 && SOS.resAuto < 1) { SOS.resAuto = Math.min(1, Math.round((SOS.resAuto + 0.05) * 100) / 100); resize(); hiN = 0; }
+      } else if (SOS.resAuto !== 1) { SOS.resAuto = 1; resize(); }
     }
     try { update(dt); render(); } catch (e) { console.error('frame', e); }
   }
@@ -845,10 +890,10 @@
   };
   SOS.topWindow = function () { let best = null; for (const k in SOS.wins) { const w = SOS.wins[k]; if (['dock', 'toast', 'keyboard', 'spiral', 'home'].indexOf(k) >= 0 || w.closing) continue; if (!best || w.z > best.z) best = w; } return best; };
   SOS.runCommand = function (raw) {
-    const t = String(raw).toLowerCase().replace(/[.,!?]/g, '').trim(), L = SOS.LABELS || {};
+    const t = String(raw).toLowerCase().replace(/[.,!?]/g, '').replace(/^(hey|hi|ok|okay) spiral\s*/, '').trim(), L = SOS.LABELS || {};
     const alias = { browser: 'browser', safari: 'browser', web: 'browser', internet: 'browser', camera: 'camera', photos: 'gallery', gallery: 'gallery', pictures: 'gallery', settings: 'settings', store: 'store', 'app store': 'store', notes: 'notes', music: 'music', calculator: 'calc', clock: 'clock', timer: 'timer', sketch: 'sketch', draw: 'sketch', breathe: 'breathe', compass: 'compass', snake: 'snake', pong: 'pong', memory: 'memory', '2048': 'g2048', dice: 'dice', converter: 'convert' };
     let m;
-    if ((m = t.match(/^(?:search|google|look up|search for)\s+(.+)$/))) { SOS.open('browser'); setTimeout(function () { if (SOS.apps.browser && SOS.apps.browser.search) SOS.apps.browser.search(m[1]); }, 300); return; }
+    if ((m = t.match(/^(?:search|google|look up|search for)\s+(.+)$/))) { const bw = SOS.wins.browser; if (bw && !bw.closing && window.NativeBridge && NativeBridge.browserLoad) { SOS.open('browser', { bring: true }); try { NativeBridge.browserLoad(bw.state.bid || 1, m[1]); } catch (e) {} } else SOS.openBrowser(m[1]); return; }
     if ((m = t.match(/^(?:open|launch|start|show|go to)\s+(?:the\s+)?(.+)$/))) { const id = alias[m[1]]; if (id && SOS.apps[id]) { if (SOS.isInstalled && !SOS.isInstalled(id)) { SOS.toast((L[id] || id) + ' is not installed. Get it in the Store.', 3.5); return; } SOS.open(id, { bring: true }); SOS.close('home'); return; } }
     if (/^(go )?home$|home screen/.test(t)) { SOS.toggleHome(); return; }
     if (/recenter|come here|bring (it|them|everything)|center/.test(t)) { SOS.recenterAll(); SOS.toast('Brought everything to you.', 2); return; }
@@ -859,7 +904,7 @@
     if ((m = t.match(/(?:theme|style)\s+(\w+)/)) && SOS.THEMES[m[1]]) { SOS.settings.theme = m[1]; SOS.save(); SOS.redrawAll(); return; }
     if (/what time|the time/.test(t)) { const d = new Date(); SOS.toast('It is ' + d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0'), 3); return; }
     if (/brighter|darker/.test(t)) { SOS.settings.bright = Math.max(0.5, Math.min(1.6, SOS.settings.bright + (/brighter/.test(t) ? 0.15 : -0.15))); SOS.save(); return; }
-    SOS.toast('I heard: "' + raw + '"', 3.5);
+    if (SOS.spiralAsk) SOS.spiralAsk(raw); else SOS.toast('I heard: "' + raw + '"', 3.5);
   };
 
   // bring every window to where you are now, keeping their layout (Home, apps, keyboard, dock)
@@ -867,8 +912,8 @@
     SOS.recenter();
     const ws = []; for (const k in SOS.wins) { if (k !== 'dock' && k !== 'toast' && k !== 'spiral' && !SOS.wins[k].closing) ws.push(SOS.wins[k]); }
     const ref = SOS.wins.home || ws.slice().sort(function (a, b) { return b.z - a.z; })[0];
-    if (ref) { let d = (ref.id === 'home' ? 0.3 : 0) - ref.yaw; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; ws.forEach(function (w) { w.yaw += d; w.place(); }); }
-    const dk = SOS.wins.dock; if (dk) { dk.yaw = 0; dk.pitch = -0.85; dk.place(); }
+    if (ref) { let d = 0 - ref.yaw; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; ws.forEach(function (w) { w.o.copy(SOS.headPos); w.yaw += d; w.place(); }); }
+    const dk = SOS.wins.dock; if (dk) { dk.o.copy(SOS.headPos); dk.yaw = SOS.wins.home ? SOS.wins.home.yaw : 0; dk.pitch = (SOS.wins.home ? SOS.wins.home.pitch : 0) - 0.6; dk.dist = 2.4; dk.place(); }
     SOS.redrawAll();
   };
   SOS.toast = function (msg, secs) { if (SOS.apps.toast) SOS.apps.toast.show(msg, secs || 3.5); };
@@ -880,14 +925,38 @@
     SOS.env = e0; SOS.setEnv(e0, true);
     try { updatePose(); render(); } catch (e) { console.error('warmup', e); }
   };
+  // ---- remember the layout: which apps were open and where (restored on the next launch) ----
+  const SKIP_SAVE = ['home', 'dock', 'keyboard', 'toast', 'gsetup'];
+  SOS.startPos = new T.Vector3();
+  SOS.saveState = function () {
+    try {
+      const list = [];
+      for (const k in SOS.wins) { const w = SOS.wins[k]; if (w.closing || SKIP_SAVE.indexOf(w.id.split('#')[0]) >= 0) continue; const e = { key: k, app: w.app.id, yaw: w.yaw, pitch: w.pitch, dist: w.dist, sc: w.sc || 1, o: [w.o.x - SOS.startPos.x, w.o.y - SOS.startPos.y, w.o.z - SOS.startPos.z] }; if (w.app.saveState) { try { e.data = w.app.saveState(w); } catch (x) {} } list.push(e); }
+      localStorage.setItem('sos.state', JSON.stringify({ v: 1, wins: list, env: SOS.env === 'passthrough' ? 'night' : SOS.env, home: !!(SOS.wins.home && !SOS.wins.home.closing) }));
+    } catch (e) {}
+  };
+  SOS.restoreState = function () {
+    let st = null; try { st = JSON.parse(localStorage.getItem('sos.state') || 'null'); } catch (e) {}
+    if (!st || !Array.isArray(st.wins)) return false;
+    let n = 0;
+    st.wins.slice(0, 8).forEach(function (e) {
+      if (!SOS.apps[e.app] || (SOS.isInstalled && !SOS.isInstalled(e.app))) return;
+      const w = SOS.open(e.app, { key: e.key, exact: true, yaw: e.yaw, pitch: e.pitch, dist: e.dist, origin: new T.Vector3(SOS.startPos.x + e.o[0], SOS.startPos.y + e.o[1], SOS.startPos.z + e.o[2]) });
+      if (w) { w.sc = e.sc || 1; if (e.data && w.app.restoreState) { try { w.app.restoreState(w, e.data); } catch (x) {} } n++; }
+    });
+    return n > 0 && !st.home;
+  };
   SOS.start = function () {
-    SOS.recenter();
-    SOS.open('home', { exact: true, yaw: 0.3, pitch: 0.0, dist: 2.4 });
-    SOS.open('dock', { exact: true, yaw: 0, pitch: -0.85, dist: 2.0 });
-    if (SOS.settings.spiral !== false && SOS.apps.spiral) SOS.open('spiral', { exact: true, yaw: -0.42, pitch: -0.3, dist: 1.5 });
+    SOS.recenter(); SOS.startPos.copy(SOS.headPos);
+    const restored = SOS.restoreState();
+    if (!restored) SOS.open('home', { exact: true, yaw: 0, pitch: 0.0, dist: 2.4 });
+    setInterval(SOS.saveState, 4000); addEventListener('pagehide', SOS.saveState); document.addEventListener('visibilitychange', function () { if (document.hidden) SOS.saveState(); });
+    SOS.open('dock', { exact: true, yaw: 0, pitch: -0.6, dist: 2.4 });
+    if (SOS.settings.spiral !== false && SOS.orbShow) SOS.orbShow(true);
+    if (SOS.settings.wake && SOS.setWake) setTimeout(function () { SOS.setWake(true); }, 3500);
     last = performance.now(); requestAnimationFrame(loop);
   };
-  function applySettingsNative() { try { if (hasNative) window.NativeBridge.setMagnetThreshold(SOS.settings.magnetT); } catch (e) {} }
+  function applySettingsNative() { try { if (hasNative) { window.NativeBridge.setMagnetThreshold(SOS.settings.magnetT); if (window.NativeBridge.setRoomTracking) window.NativeBridge.setRoomTracking(SOS.settings.world !== false); } } catch (e) {} }
   SOS.pushNative = applySettingsNative;
   SOS.quit = function () { try { if (hasNative) window.NativeBridge.quit(); } catch (e) {} };
 })();

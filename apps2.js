@@ -13,7 +13,7 @@
     show(msg, secs) {
       const hp = SOS.headYawPitch(), pitch = clamp(hp.pitch - 0.14, -0.8, 0.6);
       const w = SOS.open('toast', { yaw: hp.yaw, pitch: pitch, dist: 1.8 });
-      w.state.msg = msg; w.state.until = SOS.t + secs; w.yaw = hp.yaw; w.pitch = pitch; w.place(); w.dirty = true; SOS.focus(w);
+      w.state.msg = msg; w.state.until = SOS.t + secs; w.o.copy(SOS.headPos); w.yaw = hp.yaw; w.pitch = pitch; w.place(); w.dirty = true; SOS.focus(w);
     },
     tick(win) { if (!win.closing && SOS.t > win.state.until) SOS.close('toast'); },
     draw(ui, win) {

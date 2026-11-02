@@ -48,57 +48,52 @@
   function resize() { var d = Math.min(window.devicePixelRatio || 1, 1.0); cv.width = Math.round(innerWidth * d); cv.height = Math.round(innerHeight * d); }  // low-res on purpose: smooth and cheap on any phone
   resize(); addEventListener('resize', resize);
 
-  function arms(c, x, y, R, t, spin, hueBase) {
+  function text(c, s, x, y, size, alpha, weight, color, spacing) { if (alpha <= 0.01) return; c.save(); c.globalAlpha = alpha; c.fillStyle = color || '#fff'; c.font = (weight || 600) + ' ' + size + 'px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; try { c.letterSpacing = (spacing || 0) + 'px'; } catch (e) {} c.fillText(s, x, y); c.restore(); }
+
+  // flowing aurora ribbons behind the wordmark
+  function ribbons(c, ex, ey, u, t, a) {
+    if (a <= 0.01) return;
     c.save(); c.globalCompositeOperation = 'lighter'; c.lineCap = 'round';
-    for (var a = 0; a < 3; a++) {
-      var hue = (t * 40 + a * 120 + hueBase) % 360; c.beginPath();
-      for (var i = 0; i <= 46; i++) { var k = i / 46, ang = spin + a * (Math.PI * 2 / 3) + k * 5.2, rad = R * (0.06 + 0.9 * k), px = x + Math.cos(ang) * rad, py = y + Math.sin(ang) * rad; if (i) c.lineTo(px, py); else c.moveTo(px, py); }
-      c.strokeStyle = 'hsla(' + hue + ',95%,66%,.8)'; c.lineWidth = R * 0.13; c.stroke();
-      c.strokeStyle = 'hsla(' + hue + ',100%,88%,.6)'; c.lineWidth = R * 0.04; c.stroke();
+    var cols = ['rgba(70,130,255,', 'rgba(150,90,255,', 'rgba(60,210,255,'];
+    for (var k = 0; k < 7; k++) {
+      var col = cols[k % 3], ph = k * 0.9 + t * (0.32 + k * 0.03), amp = u * (26 + k * 9), yy = ey + (k - 3) * u * 11;
+      c.beginPath();
+      for (var i = 0; i <= 40; i++) { var f = i / 40, x = ex + (f - 0.5) * u * 520, env = Math.sin(f * Math.PI); var y = yy + Math.sin(f * 5 + ph) * amp * env * 0.6 + Math.sin(f * 9 - ph * 1.3) * amp * 0.18 * env; if (i) c.lineTo(x, y); else c.moveTo(x, y); }
+      c.strokeStyle = col + (0.22 * a) + ')'; c.lineWidth = u * 7; c.stroke();
+      c.strokeStyle = col + (0.5 * a) + ')'; c.lineWidth = Math.max(1, u * 1.6); c.stroke();
     }
     c.restore();
   }
-  function text(c, s, x, y, size, alpha, weight, color) { if (alpha <= 0.01) return; c.save(); c.globalAlpha = alpha; c.fillStyle = color || '#fff'; c.font = (weight || 600) + ' ' + size + 'px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(s, x, y); c.restore(); }
-
-  function drawEye(c, ex, ey, u, t, remain) {
-    var move = ease((t - 11.5) / 1.6);                                  // orb floats up when the instructions appear
-    var bloom = ease(t / 3.2), grow = ease((t - 1.6) / 4.5);
-    var R = u * (14 + 118 * grow) * (1 - 0.38 * move), oy = ey - u * 150 * move + u * 10 * (1 - move) * 0;
-    // glow
-    var g = c.createRadialGradient(ex, oy, 0, ex, oy, u * (40 + 340 * bloom)); g.addColorStop(0, 'rgba(120,150,255,' + (0.5 * bloom) + ')'); g.addColorStop(0.5, 'rgba(90,60,200,' + (0.18 * bloom) + ')'); g.addColorStop(1, 'rgba(0,0,0,0)');
-    var gr = u * (40 + 340 * bloom); c.fillStyle = g; c.fillRect(ex - gr, oy - gr, gr * 2, gr * 2);
-    // glass body
-    c.save(); c.beginPath(); c.arc(ex, oy, R, 0, 7); c.clip();
-    g = c.createRadialGradient(ex - R * 0.3, oy - R * 0.35, R * 0.1, ex, oy, R); g.addColorStop(0, 'rgba(255,255,255,.3)'); g.addColorStop(0.55, 'rgba(150,175,255,.14)'); g.addColorStop(1, 'rgba(15,20,50,.6)'); c.fillStyle = g; c.fillRect(ex - R, oy - R, R * 2, R * 2);
-    arms(c, ex, oy, R * 0.9, t, t * (0.7 + (t > 17 ? 3 : 0)), 200);
-    g = c.createRadialGradient(ex, oy, 0, ex, oy, R * 0.25); g.addColorStop(0, 'rgba(255,255,255,.95)'); g.addColorStop(1, 'rgba(255,255,255,0)'); c.fillStyle = g; c.beginPath(); c.arc(ex, oy, R * 0.25, 0, 7); c.fill();
-    g = c.createRadialGradient(ex - R * 0.4, oy - R * 0.45, 0, ex - R * 0.4, oy - R * 0.45, R * 0.5); g.addColorStop(0, 'rgba(255,255,255,.7)'); g.addColorStop(1, 'rgba(255,255,255,0)'); c.fillStyle = g; c.fillRect(ex - R, oy - R, R * 2, R * 2);
-    c.restore();
-    c.strokeStyle = 'rgba(255,255,255,.75)'; c.lineWidth = Math.max(1, R * 0.04); c.beginPath(); c.arc(ex, oy, R, 0, 7); c.stroke();
-    // ripples while booting
-    for (var k = 0; k < 3; k++) { var p = ((t * 0.35 + k / 3) % 1); c.strokeStyle = 'rgba(160,180,255,' + (0.25 * (1 - p) * bloom) + ')'; c.lineWidth = 2; c.beginPath(); c.arc(ex, oy, R * (1.05 + p * 1.6), 0, 7); c.stroke(); }
-    // title
-    text(c, 'SpatialOS', ex, ey + u * 200, u * 64, win(t, 3.4, 5.2, 11, 12.2), 700);
-    text(c, 'version 2.0', ex, ey + u * 252, u * 26, 0.6 * win(t, 4.2, 5.8, 11, 12.2), 500);
-    // instructions
-    var a2 = win(t, 12.6, 14, 18.6, 19.6);
-    text(c, 'Put your phone', ex, ey + u * 30, u * 62, a2, 700); text(c, 'in your viewer', ex, ey + u * 100, u * 62, a2, 700);
-    text(c, 'Look straight ahead and relax', ex, ey + u * 168, u * 28, 0.7 * a2, 500);
-    // countdown
-    if (t > 17.2) { var n = Math.max(0, Math.ceil(BOOT_SECONDS - t)); text(c, 'Starting in ' + n, ex, ey + u * 250, u * 30, 0.8 * win(t, 17.2, 17.8, 19.4, 19.9), 500); }
-    // progress + status (small, bottom)
-    var by = ey + u * 300, bw = u * 340, bh = Math.max(3, u * 7);
-    var pa = win(t, 0.8, 2, 18.6, 19.5);
-    if (pa > 0.02) { c.save(); c.globalAlpha = pa; c.fillStyle = 'rgba(255,255,255,.16)'; c.fillRect(ex - bw / 2, by, bw, bh); c.fillStyle = '#6aa8ff'; c.fillRect(ex - bw / 2, by, bw * clamp(t / BOOT_SECONDS, 0, 1), bh); c.restore(); text(c, bootStatus, ex, by + u * 38, u * 24, 0.65 * pa, 500); }
-    if (bootWarn) text(c, bootWarn, ex, ey + u * 355, u * 22, 0.95 * win(t, 5, 6, 19, 19.8), 500, '#ffd60a');
+  // wordmark whose letters are revealed by a travelling band of light
+  function wordmark(c, ex, ey, u, t) {
+    var a = ease((t - 2.2) / 2.2) * (1 - ease((t - 11) / 1.4)); if (a <= 0.01) return;
+    var size = u * 92, str = 'SPATIAL OS', sp = u * 14;
+    c.save(); c.font = '300 ' + size + 'px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'; try { c.letterSpacing = sp + 'px'; } catch (e) {}
+    var w = c.measureText(str).width, x0 = ex - w / 2, sweep = ((t - 3) * 0.28) % 1.6 - 0.3;
+    c.textAlign = 'left'; c.textBaseline = 'middle'; c.globalAlpha = a;
+    var g = c.createLinearGradient(x0, 0, x0 + w, 0);
+    var s0 = clamp(sweep, 0, 1);
+    g.addColorStop(0, 'rgba(255,255,255,.62)'); g.addColorStop(clamp(s0 - 0.14, 0, 1), 'rgba(255,255,255,.62)'); g.addColorStop(s0, 'rgba(200,225,255,1)'); g.addColorStop(clamp(s0 + 0.14, 0, 1), 'rgba(255,255,255,.62)'); g.addColorStop(1, 'rgba(255,255,255,.62)');
+    c.shadowColor = 'rgba(120,160,255,.55)'; c.shadowBlur = u * 26;
+    c.fillStyle = g; c.fillText(str, x0, ey); c.restore();
+    text(c, 'spatial computing for Android', ex, ey + u * 84, u * 25, 0.55 * a * ease((t - 4.6) / 1.6), 400, '#fff', u * 4);
+  }
+  function drawEye(c, ex, ey, u, t) {
+    ribbons(c, ex, ey, u, t, 0.55 * ease((t - 0.8) / 2.6) * (1 - ease((t - 10.6) / 1.6)));
+    wordmark(c, ex, ey, u, t);
+    // "Powered by Android" end card
+    var pa = ease((t - 12.8) / 1.6) * (1 - ease((t - 18.4) / 1.2));
+    text(c, 'Powered by', ex, ey - u * 78, u * 30, 0.95 * pa, 500);
+    text(c, 'Android', ex, ey + u * 8, u * 98, pa, 500, '#fff', -u * 2);
+    if (bootWarn) text(c, bootWarn, ex, ey + u * 250, u * 22, 0.95 * win(t, 5, 6, 19, 19.8), 500, '#ffd60a');
   }
   function frame() {
     var t = (performance.now() - t0) / 1000, c = cv.getContext('2d'), W = cv.width, H = cv.height;
     c.setTransform(1, 0, 0, 1, 0, 0); c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
     var sep = lensSepPx(), u = Math.min(W / 2, H) / 760, ey = H / 2 - u * 20;
     if (bootFail) { var m = bootFail; [W / 2 - sep / 2, W / 2 + sep / 2].forEach(function (x) { text(c, 'Something went wrong', x, ey - u * 40, u * 44, 1, 700); text(c, String(m).slice(0, 60), x, ey + u * 20, u * 26, 0.8, 500, '#ffd60a'); text(c, 'Tap the screen to try again', x, ey + u * 80, u * 26, 0.7, 500); }); requestAnimationFrame(frame); return; }
-    var fade = 1 - ease((t - 19.2) / 0.8);
-    c.globalAlpha = fade; drawEye(c, W / 2 - sep / 2, ey, u, t, BOOT_SECONDS - t); drawEye(c, W / 2 + sep / 2, ey, u, t, BOOT_SECONDS - t); c.globalAlpha = 1;
+    var fade = 1;
+    c.globalAlpha = fade; drawEye(c, W / 2 - sep / 2, ey, u, t); drawEye(c, W / 2 + sep / 2, ey, u, t); c.globalAlpha = 1;
     if (t >= BOOT_SECONDS) {
       if (ready && !started) { begin(); return; }
       if (!ready) { [W / 2 - sep / 2, W / 2 + sep / 2].forEach(function (x) { text(c, bootStatus || 'Almost there…', x, ey, u * 30, 0.8, 500); }); }
@@ -129,7 +124,7 @@
       status('Loading 3D engine…', 0.08); await sleep(60);
       await loadScript('three.min.js');
       status('Loading interface…', 0.25); await sleep(40);
-      await loadScript('core.js'); await loadScript('apps.js'); await loadScript('apps2.js'); await loadScript('apps3.js'); await loadScript('apps4.js'); await loadScript('handtrack.js');
+      await loadScript('core.js'); await loadScript('apps.js'); await loadScript('apps2.js'); await loadScript('apps3.js'); await loadScript('apps4.js'); await loadScript('spiral.js'); await loadScript('handtrack.js');
       var SOS = window.SOS, S = SOS.settings; SOSref = SOS;
       if (crashed || handsCrashed) {
         S.camera = false; if (crashed) S.resScale = Math.min(S.resScale, 0.6);
