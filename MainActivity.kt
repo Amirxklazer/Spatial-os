@@ -12,6 +12,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.core.BaseOptions
+import com.google.mediapipe.tasks.core.Delegate
 import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
@@ -162,8 +163,9 @@ class MainActivity : Activity(), SensorEventListener {
             override fun onPermissionRequest(request: PermissionRequest) {
                 runOnUiThread {
                     val camOk = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                    val micOk = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
                     val wanted = request.resources.filter {
-                        it == PermissionRequest.RESOURCE_VIDEO_CAPTURE && camOk
+                        (it == PermissionRequest.RESOURCE_VIDEO_CAPTURE && camOk) || (it == PermissionRequest.RESOURCE_AUDIO_CAPTURE && micOk)
                     }.toTypedArray()
                     if (wanted.isNotEmpty()) request.grant(wanted) else request.deny()
                 }
@@ -222,7 +224,7 @@ class MainActivity : Activity(), SensorEventListener {
                             c.drawColor(Color.WHITE)
                             v.draw(c)
                             out.reset()
-                            bm.compress(Bitmap.CompressFormat.JPEG, 66, out)
+                            bm.compress(Bitmap.CompressFormat.JPEG, 88, out)
                             jpeg = out.toByteArray()
                             seq += 1
                         }
@@ -1089,8 +1091,8 @@ class MainActivity : Activity(), SensorEventListener {
             val map = ch.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             val sizes = map?.getOutputSizes(ImageFormat.YUV_420_888)
             if (sizes == null || sizes.isEmpty()) { camState = "error"; camErr = "no sizes"; return false }
-            var best = sizes.filter { it.width <= 960 && it.height <= 720 && it.width * 3 == it.height * 4 }.maxByOrNull { it.width * it.height }
-            if (best == null) best = sizes.filter { it.width <= 960 && it.height <= 720 }.maxByOrNull { it.width * it.height }
+            var best = sizes.filter { it.width <= 1280 && it.height <= 960 && it.width * 3 == it.height * 4 }.maxByOrNull { it.width * it.height }
+            if (best == null) best = sizes.filter { it.width <= 1280 && it.height <= 960 }.maxByOrNull { it.width * it.height }
             if (best == null) best = sizes.minByOrNull { it.width * it.height }!!
             val th = HandlerThread("cam")
             th.start()
@@ -1220,7 +1222,7 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }
         val out = ByteArrayOutputStream(w * h / 6)
-        YuvImage(nv, ImageFormat.NV21, w, h, null).compressToJpeg(Rect(0, 0, w, h), 70, out)
+        YuvImage(nv, ImageFormat.NV21, w, h, null).compressToJpeg(Rect(0, 0, w, h), 90, out)
         return out.toByteArray()
     }
 
@@ -1240,16 +1242,20 @@ class MainActivity : Activity(), SensorEventListener {
         handsState = "loading"
         handExec.execute {
             try {
-                val base = BaseOptions.builder().setModelAssetPath("hand_landmarker.task").build()
-                val opts = HandLandmarker.HandLandmarkerOptions.builder()
-                    .setBaseOptions(base)
-                    .setRunningMode(RunningMode.VIDEO)
-                    .setNumHands(2)
-                    .setMinHandDetectionConfidence(0.4f)
-                    .setMinHandPresenceConfidence(0.4f)
-                    .setMinTrackingConfidence(0.4f)
-                    .build()
-                landmarker = HandLandmarker.createFromOptions(this@MainActivity, opts)
+                fun make(d: Delegate): HandLandmarker {
+                    val base = BaseOptions.builder().setModelAssetPath("hand_landmarker.task").setDelegate(d).build()
+                    val opts = HandLandmarker.HandLandmarkerOptions.builder()
+                        .setBaseOptions(base)
+                        .setRunningMode(RunningMode.VIDEO)
+                        .setNumHands(2)
+                        .setMinHandDetectionConfidence(0.4f)
+                        .setMinHandPresenceConfidence(0.4f)
+                        .setMinTrackingConfidence(0.4f)
+                        .build()
+                    return HandLandmarker.createFromOptions(this@MainActivity, opts)
+                }
+                // GPU first (less lag); if this phone cannot run it, fall back to the CPU
+                landmarker = try { make(Delegate.GPU) } catch (e: Throwable) { make(Delegate.CPU) }
                 handsState = if (handsWanted) "on" else "off"
                 if (!handsWanted) { try { landmarker?.close() } catch (e: Exception) { }; landmarker = null }
             } catch (e: Throwable) {

@@ -86,7 +86,8 @@
 
   /* ---------- Home (floating icons, left tab bar, page dots) ---------- */
   reg({
-    id: 'home', w: 1180, h: 800, chrome: false, glass: false, dist: 2.4,
+    id: 'home', w: 1180, h: 800,
+    onSwipe(win, dir) { const st = win.state, pages = Math.max(1, Math.ceil(homeList().length / 13)), np = Math.max(0, Math.min(pages - 1, (st.page || 0) + dir)); if (np !== st.page) { st.page = np; win.dirty = true; if (SOS.tick) SOS.tick(900, 0.05, 0.05); } }, chrome: false, glass: false, dist: 2.4,
     create(win) { win.state = { page: 0 }; },
     draw(ui, win) {
       const c = ui.c, st = win.state, list = homeList(), per = 13, pages = Math.max(1, Math.ceil(list.length / per));
@@ -105,7 +106,10 @@
       const dtn = new Date(), hh = String(dtn.getHours()).padStart(2, '0'), mn = String(dtn.getMinutes()).padStart(2, '0');
       ui.text(hh + ':' + mn, 660, 66, { size: 74, align: 'center', weight: 300, color: '#fff', shadow: true });
       ui.text(dtn.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' }), 660, 124, { size: 24, align: 'center', weight: 500, color: 'rgba(255,255,255,.85)', shadow: true });
-      if (window.OrbitLogo) { try { window.OrbitLogo(c, 1090, 70, 30, 1.2, 0.95); } catch (e) {} }
+      { const bx = 900, by = 40, hv = ui.hover('ctl'); ui.hit('ctl', bx, by, 240, 62, { onClick: function () { SOS.open('control', { bring: true }); } });
+        ui.rect(bx, by, 240, 62, 31, hv ? 'rgba(255,255,255,.30)' : 'rgba(255,255,255,.14)', 'rgba(255,255,255,.28)', 1.5);
+        c.save(); c.strokeStyle = '#fff'; c.lineWidth = 4; c.lineCap = 'round'; c.lineJoin = 'round'; c.beginPath(); c.moveTo(bx + 36, by + 26); c.lineTo(bx + 47, by + 37); c.lineTo(bx + 58, by + 26); c.stroke(); c.restore();
+        ui.text('Control Center', bx + 78, by + 32, { size: 22, weight: 600 }); }
       // icons
       const sp = 206, rowStep = 168, cx0 = 660, cy0 = 455 - rowStep, R = 62, sub = list.slice(st.page * per, st.page * per + per);
       let n = 0;
@@ -131,18 +135,16 @@
 
   /* ---------- Dock ---------- */
   const ENVS = ['night', 'sunset', 'studio', 'passthrough'], ENV_NAMES = { passthrough: 'Camera', sunset: 'Sunset Dunes', night: 'Moonlight', studio: 'Studio' };
+  SOS.ENVS = ENVS; SOS.ENV_NAMES = ENV_NAMES;
   reg({
-    id: 'dock', w: 650, h: 140, chrome: false, radius: 70, dist: 2.0,
+    id: 'dock', w: 340, h: 140, chrome: false, radius: 70, dist: 2.0,
     draw(ui, win) {
       const c = ui.c, items = [
-        ['home', 'Home', function () { SOS.toggleHome(); }, false],
         ['target', 'Recenter', function () { SOS.recenterAll(); }, false],
-        ['env', 'Space', function () { SOS.setEnv(ENVS[(ENVS.indexOf(SOS.env) + 1) % ENVS.length]); win.dirty = true; }, false],
-        ['hand', 'Hands', function () { if (SOS.camState !== 'on') { SOS.toast('Turn the camera on first: Settings > Passthrough.', 4); return; } set('hands', !S.hands); if (S.hands) SOS.startHands(); else SOS.stopHands(); win.dirty = true; }, S.hands && SOS.camState === 'on'],
-        ['settings', 'Settings', function () { SOS.open('settings'); }, false]
+        ['home', 'Home', function () { SOS.toggleHome(); }, false]
       ];
       items.forEach(function (it, i) {
-        const x = 85 + i * 120, y = 60, id = 'd_' + it[0], hv = ui.hover(id);
+        const x = 92 + i * 156, y = 60, id = 'd_' + it[0], hv = ui.hover(id);
         ui.hit(id, x - 58, y - 56, 116, 128, { onClick: it[2] });
         c.fillStyle = hv ? 'rgba(130,175,255,.45)' : 'rgba(255,255,255,.10)'; c.beginPath(); c.arc(x, y, hv ? 47 : 42, 0, 7); c.fill();
         if (hv) { c.strokeStyle = 'rgba(200,220,255,.9)'; c.lineWidth = 3; c.beginPath(); c.arc(x, y, 49, 0, 7); c.stroke(); }
@@ -256,8 +258,8 @@
     if (pane === 'general') return [head('SPACE'), t('Assistant orb (optional, off by default)', 'spiral', function () { SOS.orbShow(S.spiral); }), t('Hey Spiral (always listening)', 'wake', function () { SOS.setWake(S.wake); }), t('Spiral speaks answers', 'speak'), { type: 'button', label: 'Gemini API key', note: 'Set or change the key Spiral uses', onClick: function () { SOS.open('gsetup', { bring: true }); } }, { type: 'button', label: 'Clear Spiral chats', note: 'Deletes saved conversations', onClick: function () { SOS.clearChats(); SOS.toast('Spiral chats cleared.', 2); } }, { type: 'button', label: 'Recenter view', note: 'Brings every app to you', onClick: function () { SOS.recenterAll(); } }, { type: 'button', label: 'Open Home', onClick: function () { SOS.toggleHome(); } },
       head('SYSTEM'), { type: 'button', label: 'Restore default settings', onClick: function () { SOS.resetSettings(); SOS.setEnv('passthrough'); SOS.setResScale(); win.dirty = true; } }, { type: 'button', label: 'Shut Down', color: '#ff453a', onClick: function () { SOS.quit(); } }];
     if (pane === 'display') return [head('LENSES'), sl('Eye distance', 'ipd', 54, 74, 1, function (v) { return v + ' mm'; }), sl('Lens spacing (fixes double view)', 'lensSep', 50, 76, 1, function (v) { return v + ' mm'; }), sl('Field of view', 'fov', 60, 100, 1, function (v) { return v + '°'; }), t('Lens distortion correction', 'distortion'), sl('Lens strength', 'lens', 0, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }),
-      head('COMFORT'), t('Comfort vignette while turning', 'comfort'), t('Auto quality (keeps it smooth)', 'autoRes'), sl('Look-ahead (less lag)', 'predict', 0, 60, 5, function (v) { return v + ' ms'; }), { type: 'info', label: 'Frame rate', value: SOS.fps + ' fps' },
-      head('DISPLAY'), sl('Render quality', 'resScale', 0.4, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }, function () { SOS.setResScale(); }), t('Centre divider', 'divider'), sl('Window size', 'winScale', 0.7, 1.4, 0.05, function (v) { return Math.round(v * 100) + '%'; })];
+      head('COMFORT'), t('Comfort vignette while turning', 'comfort'), sl('Look-ahead (less lag)', 'predict', 0, 60, 5, function (v) { return v + ' ms'; }), { type: 'info', label: 'Frame rate', value: SOS.fps + ' fps' },
+      head('DISPLAY'), t('Centre divider', 'divider'), sl('Window size', 'winScale', 0.7, 1.4, 0.05, function (v) { return Math.round(v * 100) + '%'; })];
     if (pane === 'look') {
       const th = function (opts) { return { type: 'choice', label: 'Theme', value: S.theme, opts: opts, set: function (v) { set('theme', v); SOS.redrawAll(); }, h: 130 }; };
       return [head('GLASS THEME'), th([['liquid', 'Liquid'], ['aurora', 'Aurora'], ['sunset', 'Sunset']]), th([['mint', 'Mint'], ['midnight', 'Midnight'], ['graphite', 'Graphite']]), { type: 'info', label: 'Tip', value: 'Midnight and Graphite are the most solid' }];
@@ -274,7 +276,7 @@
       head('CARDBOARD'), t('Magnet button', 'magnet'), sl('Magnet trigger', 'magnetT', 15, 120, 5, function (v) { return v + ' µT'; }, function () { SOS.pushNative(); }), { type: 'info', label: 'Touch button', value: 'Tap = select · Hold = Home' },
       head('GAZE'), t('Dwell to select', 'dwell'), sl('Dwell time', 'dwellT', 0.6, 3, 0.1, function (v) { return v.toFixed(1) + ' s'; })];
     if (pane === 'sound') return [head('AUDIO'), t('Interface sounds', 'sound'), sl('Volume', 'volume', 0, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }, function () { SOS.tick(1200, 0.08, 0.1); })];
-    return [head('ORBIT OS'), { type: 'info', label: 'Version', value: '3.0' }, { type: 'info', label: 'Frame rate', value: SOS.fps + ' fps' }, { type: 'info', label: 'Head tracking', value: SOS.nativeOK ? 'Gyroscope' : 'Mouse / keys' }, { type: 'info', label: 'Camera', value: SOS.camState === 'on' ? 'Live' : 'Off' }, { type: 'info', label: 'AR world tracking', value: (function () { try { return window.NativeBridge.arStatus(); } catch (e) { return 'n/a'; } })() },
+    return [head('ORBIT OS'), { type: 'info', label: 'Version', value: '3.3' }, { type: 'info', label: 'Frame rate', value: SOS.fps + ' fps' }, { type: 'info', label: 'Head tracking', value: SOS.nativeOK ? 'Gyroscope' : 'Mouse / keys' }, { type: 'info', label: 'Camera', value: SOS.camState === 'on' ? 'Live' : 'Off' }, { type: 'info', label: 'AR world tracking', value: (function () { try { return window.NativeBridge.arStatus(); } catch (e) { return 'n/a'; } })() },
       { type: 'info', label: 'Hands', value: !S.hands ? 'Off' : SOS.handsState }, { type: 'info', label: 'Open windows', value: String(Object.keys(SOS.wins).length) }];
   }
   SOS.apps.settings.tick = function (win) { if (win.state.pane === 'about' || win.state.pane === 'input' || win.state.pane === 'passthrough') { win._t = (win._t || 0) + 1; if (win._t % 20 === 0) win.dirty = true; } };

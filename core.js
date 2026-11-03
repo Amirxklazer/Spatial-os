@@ -5,11 +5,11 @@
   const SOS = (window.SOS = { apps: {}, wins: {}, hands: [], env: 'passthrough', videoReady: false, video: null, t: 0, fps: 60, zc: 1, vidAspect: 16 / 9, yawRaw: 0, pitchRaw: 0 });
 
   /* ---------- settings ---------- */
-  const DEF = { ipd: 63, lensSep: 62, fov: 82, distortion: true, lens: 0.4, resScale: 0.9, autoRes: true, comfort: true, predict: 30, camSync: 110, camZoom: 1, theme: 'liquid', spiral: false, wide: false, kbScale: 1, divider: true, winScale: 1, bright: 1, hands: false, palm: true, magnet: true, magnetT: 45, dwell: false, dwellT: 1.4, handCursor: false, volume: 0.7, sound: true, env: 'night', camera: false, wake: false, speak: true, world: false, gmodel: 'gemini-flash-latest' };
+  const DEF = { ipd: 63, lensSep: 62, fov: 82, distortion: true, lens: 0.4, resScale: 1, autoRes: false, comfort: true, predict: 30, camSync: 110, camZoom: 1, theme: 'liquid', spiral: false, wide: false, kbScale: 1, divider: true, winScale: 1, bright: 1, hands: false, palm: true, magnet: true, magnetT: 45, dwell: false, dwellT: 1.4, handCursor: false, volume: 0.7, sound: true, env: 'night', camera: false, wake: false, speak: true, world: false, gmodel: 'gemini-flash-latest' };
   SOS.settings = Object.assign({}, DEF);
   try { Object.assign(SOS.settings, JSON.parse(localStorage.getItem('sos.settings') || '{}')); } catch (e) {}
   // v1.2 migration: hand tracking was the likely crash source, so it starts off again for everyone
-  try { if (localStorage.getItem('sos.v') !== '3.0') { SOS.settings.hands = false; SOS.settings.camera = false; SOS.settings.resScale = 0.9; SOS.settings.lens = 0.4; SOS.settings.spiral = false; SOS.settings.wake = false; SOS.settings.world = false; SOS.settings.wide = false; localStorage.setItem('sos.v', '3.0'); try { localStorage.setItem('sos.run', 'ok'); localStorage.setItem('sos.handsrun', '0'); } catch (e2) {} } } catch (e) {}
+  try { if (localStorage.getItem('sos.v') !== '3.0') { SOS.settings.hands = false; SOS.settings.camera = false; SOS.settings.resScale = 1; SOS.settings.autoRes = false; SOS.settings.lens = 0.4; SOS.settings.spiral = false; SOS.settings.wake = false; SOS.settings.world = false; SOS.settings.wide = false; localStorage.setItem('sos.v', '3.0'); try { localStorage.setItem('sos.run', 'ok'); localStorage.setItem('sos.handsrun', '0'); } catch (e2) {} } } catch (e) {}
   SOS.save = function () { try { localStorage.setItem('sos.settings', JSON.stringify(SOS.settings)); } catch (e) {} };
   SOS.resetSettings = function () { Object.assign(SOS.settings, DEF); SOS.save(); SOS.applySettings(); };
 
@@ -78,9 +78,9 @@
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
     let cw = Math.max(64, Math.round(innerWidth * dpr)), ch = Math.max(64, Math.round(innerHeight * dpr));
-    if (cw > 1600) { ch = Math.round(ch * 1600 / cw); cw = 1600; } // a phone GPU cannot push native 1080p stereo with distortion smoothly: this is the main cause of dizziness
+    if (cw > 2560) { ch = Math.round(ch * 2560 / cw); cw = 2560; } // a phone GPU cannot push native 1080p stereo with distortion smoothly: this is the main cause of dizziness
     renderer.setSize(cw, ch, false);
-    const rs = Math.min(1, SOS.settings.resScale * (SOS.resAuto || 1)); W = Math.max(64, Math.round(cw * rs)); H = Math.max(64, Math.round(ch * rs));
+    const rs = 1; W = Math.max(64, Math.round(cw * rs)); H = Math.max(64, Math.round(ch * rs));
     if (rt) rt.dispose();
     rt = new T.WebGLRenderTarget(W, H, { minFilter: T.LinearFilter, magFilter: T.LinearFilter, format: T.RGBAFormat, depthBuffer: true, stencilBuffer: false });
     distMat.uniforms.tex.value = rt.texture;
@@ -140,9 +140,11 @@
     }
     c.lineTo(w, h); c.closePath(); c.fillStyle = col; c.fill();
   }
+  SOS.mulberry = mulberry; SOS.ridge = ridge; SOS.envPainters = {};
   SOS.drawEnv = function (kind, cv) {
     const w = cv.width, h = cv.height, c = cv.getContext('2d'), hz = h * 0.5, fx = w * 0.75;
     c.clearRect(0, 0, w, h);
+    if (SOS.envPainters[kind]) { SOS.envPainters[kind](c, w, h, hz, fx); return; }
     if (kind === 'sunset') {
       const g = c.createLinearGradient(0, 0, 0, hz); g.addColorStop(0, '#1b2658'); g.addColorStop(0.45, '#6a58a3'); g.addColorStop(0.8, '#ff9a63'); g.addColorStop(1, '#ffd8a2');
       c.fillStyle = g; c.fillRect(0, 0, w, h);
@@ -507,7 +509,7 @@
   }
   function beginCarry(p, w, mode) {
     const cr = { win: w, p: p, mode: mode, dy: 0, dp: 0 };
-    if (p.isHand) { cr.dy = angWrap(w.yaw - Math.atan2(-p.dir.x, -p.dir.z)); cr.dp = w.pitch - Math.asin(clamp(p.dir.y, -1, 1)); }
+    cr.dy = angWrap(w.yaw - Math.atan2(-p.dir.x, -p.dir.z)); cr.dp = w.pitch - Math.asin(clamp(p.dir.y, -1, 1));
     SOS.carry = cr; w.dirty = true; SOS.tick(900, 0.05, 0.05);
   }
   function angWrap(a) { while (a > Math.PI) a -= Math.PI * 2; while (a < -Math.PI) a += Math.PI * 2; return a; }
@@ -551,6 +553,7 @@
     if (!h || h.win !== d.win) return;
     const dy = h.py - d.py, dx = h.px - d.px;
     if (!d.moved && Math.hypot(dx, dy) > 22) d.moved = true;
+    if (d.win.app.onSwipe && Math.abs(dx) > 150 && Math.abs(dx) > 1.5 * Math.abs(dy)) { d.win.app.onSwipe(d.win, dx < 0 ? 1 : -1); d.px = h.px; d.py = h.py; d.moved = true; }   // drag sideways on a paged menu = next / previous page
     if (d.el && d.el.kind === 'slider') { d.el.onDrag(h.px, h.py); d.win.dirty = true; return; }
     if (d.moved && d.win.maxScroll > 0 && !(d.el && d.el.noScroll)) { d.win.scrollY = clamp(d.sy - dy, 0, d.win.maxScroll); d.win.dirty = true; }
     sendApp(d.win, 'move', p);
@@ -585,6 +588,19 @@
     }
     if (SOS.kbFor && (!h.win || (h.win !== SOS.kbFor && h.win.id !== 'keyboard'))) { /* keep keyboard until app hides it */ }
   }
+  // touch: press and hold on a window to pick it up, move your head to carry it, lift your finger to drop it
+  // what the hold does depends on what the gaze dot is on: a scrolling / swiping surface is dragged by moving your head, an app window is carried
+  SOS.holdStart = function () {
+    const p = P.gaze, h = p.hit; if (!h || !h.win || h.win.id === 'toast') return false;
+    const w = h.win, el = h.el;
+    const menu = !(el && el.kind === 'grab') && (w.maxScroll > 0 || w.app.onSwipe || w.app.onPointer || (el && el.kind === 'slider'));
+    if (menu) { pDown(p); if (p.down) { p.down.moved = true; p.down.hold = true; } return 'drag'; }
+    SOS.focus(w); beginCarry(p, w, 'hold'); return 'carry';
+  };
+  SOS.holdEnd = function (mode) { if (mode === 'drag') { if (P.gaze.down) pUp(P.gaze); } else SOS.releaseGrab(); };
+  SOS.releaseGrab = function () { if (SOS.carry && SOS.carry.mode === 'hold' && !SOS.carry.p.isHand) endCarry(); };
+  // touch: quick left/right flick goes to the next/previous page of whatever window you are looking at
+  SOS.swipe = function (dir) { const h = P.gaze.hit; if (h && h.win && h.win.app.onSwipe) { h.win.app.onSwipe(h.win, dir); return true; } return false; };
   SOS.gazeScroll = function (dyPx) {
     const h = P.gaze.hit; if (!h) return; const w = h.win;
     if (w.maxScroll > 0) { w.scrollY = clamp(w.scrollY + dyPx, 0, w.maxScroll); w.dirty = true; }
@@ -751,20 +767,29 @@
   canvas.addEventListener('touchstart', function (e) {
     e.preventDefault(); SOS.audio();
     const t = e.touches[0]; touch = { x: t.clientX, y: t.clientY, lx: t.clientX, ly: t.clientY, t: performance.now(), moved: false, long: false };
-    touch.timer = setTimeout(function () { if (touch && !touch.moved) { touch.long = true; SOS.toggleHome(); SOS.tick(500, 0.12, 0.06); } }, 800);
+    // hold ~0.4s on a window = pick it up; hold ~0.9s on empty space = open or close Home
+    const me = touch;
+    me.timer = setTimeout(function () {
+      if (touch !== me || me.moved) return;
+      const hm = SOS.holdStart(); if (hm) { me.long = true; me.carrying = hm; return; }
+      me.timer = setTimeout(function () { if (touch === me && !me.moved) { me.long = true; SOS.toggleHome(); SOS.tick(500, 0.12, 0.06); } }, 500);
+    }, 400);
   }, { passive: false });
   canvas.addEventListener('touchmove', function (e) {
     e.preventDefault(); if (!touch) return; const t = e.touches[0];
     const dy = t.clientY - touch.ly; touch.ly = t.clientY; touch.lx = t.clientX;
+    if (touch.carrying) return;   // finger is just holding the window; the head moves it
     if (Math.hypot(t.clientX - touch.x, t.clientY - touch.y) > 14) { touch.moved = true; clearTimeout(touch.timer); }
     if (touch.moved) SOS.gazeScroll(-dy * 2.2);
   }, { passive: false });
   canvas.addEventListener('touchend', function (e) {
     e.preventDefault(); if (!touch) return; clearTimeout(touch.timer);
     const t = touch; touch = null;
+    if (t.carrying) { SOS.holdEnd(t.carrying); return; }
+    if (t.moved) { const ddx = t.lx - t.x, ddy = t.ly - t.y; if (performance.now() - t.t < 650 && Math.abs(ddx) > 80 && Math.abs(ddx) > 1.6 * Math.abs(ddy)) SOS.swipe(ddx < 0 ? 1 : -1); }
     if (!t.moved && !t.long) { if (gearZone(t.x, t.y)) SOS.open('settings'); else SOS.click(); }
   }, { passive: false });
-  canvas.addEventListener('touchcancel', function () { if (touch) clearTimeout(touch.timer); touch = null; });
+  canvas.addEventListener('touchcancel', function () { if (touch) { clearTimeout(touch.timer); if (touch.carrying) SOS.holdEnd(touch.carrying); } touch = null; });
   // desktop testing: drag to look, click to select
   let md = null;
   canvas.addEventListener('mousedown', function (e) { md = { x: e.clientX, y: e.clientY, moved: false }; SOS.audio(); });
@@ -788,7 +813,7 @@
   SOS.stream = null;
   SOS.onCamPerm = function (ok) { if (SOS._camRes) { const r = SOS._camRes; SOS._camRes = null; r(!!ok); } };
   // Native camera (Android Camera2) -> JPEG frames -> a canvas that behaves like a <video> for the rest of the app.
-  const camCv = document.createElement('canvas'); camCv.width = 640; camCv.height = 360;
+  const camCv = document.createElement('canvas'); camCv.width = 640; camCv.height = 360; SOS.camCv = camCv;
   const camCtx = camCv.getContext('2d');
   Object.defineProperty(camCv, 'videoWidth', { get: function () { return camCv._ok ? camCv.width : 0; } });
   Object.defineProperty(camCv, 'videoHeight', { get: function () { return camCv._ok ? camCv.height : 0; } });

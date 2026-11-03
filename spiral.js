@@ -146,14 +146,14 @@
   SOS.orbHit = function (p) {
     if (!orb.visible) return -1;
     _a.copy(O.p).sub(SOS.headPos).sub(p.origin); const t = _a.dot(p.dir); if (t <= 0.05) return -1;
-    const d2 = _a.lengthSq() - t * t, r = R * (p.isHand ? 1.8 : 1.3); return d2 < r * r ? t : -1;
+    const d2 = _a.lengthSq() - t * t, r = R * (p.isHand ? 2.8 : 1.3); return d2 < r * r ? t : -1;
   };
   SOS.orbClick = function () { SOS.tick(1600, 0.07, 0.08); if (SOS.spiralSpeaking) { SOS.stopSpeak(); return; } SOS.startVoice('command'); };
   SOS.orbDown = function (p) { O.held = p; O.state = 'held'; O.hold = clamp(_a.copy(O.p).sub(SOS.headPos).length(), 0.5, 3); O.vs.set(0, 0, 0); O.prev.copy(O.p); O.bounce = 0.6; SOS.tick(1800, 0.06, 0.07); };
   SOS.orbUp = function (p) {
     if (O.held !== p) return; O.held = null;
-    const sp = O.vs.length(); if (sp > 9) O.vs.multiplyScalar(9 / sp);
-    if (O.vs.length() > 0.7) { O.v.copy(O.vs).multiplyScalar(1.1); O.state = 'fly'; } else { O.v.set(0, 0, 0); O.state = 'fly'; }
+    const sp = O.vs.length(); if (sp > 14) O.vs.multiplyScalar(14 / sp);
+    if (O.vs.length() > 0.7) { O.v.copy(O.vs).multiplyScalar(1.7); O.state = 'fly'; } else { O.v.set(0, 0, 0); O.state = 'fly'; }
     O.rest = 0; SOS.tick(1200, 0.05, 0.05);
   };
   SOS.hooks.push(function (dt) {
