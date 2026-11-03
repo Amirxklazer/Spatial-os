@@ -1,4 +1,4 @@
-name: Build SpatialOS APK
+name: Build Orbit OS APK
 
 on:
   push:
@@ -41,7 +41,7 @@ jobs:
           need() { [ -f "$1" ] || { echo "::error::Missing file in repo root: $1"; exit 1; }; }
 
           for f in settings.gradle build.gradle gradle.properties app_build.gradle AndroidManifest.xml MainActivity.kt ic_launcher.png \
-                   index.html three.min.js core.js apps.js apps2.js apps3.js apps4.js spiral.js handtrack.js; do
+                   index.html three.min.js core.js apps.js apps2.js apps3.js apps4.js apps5.js apps6.js peer.js spiral.js handtrack.js; do
             need "$f"
           done
 
@@ -50,7 +50,7 @@ jobs:
           cp MainActivity.kt "$P/java/com/spatialos/cardboard/MainActivity.kt"
           cp ic_launcher.png "$P/res/mipmap-xxhdpi/ic_launcher.png"
 
-          for f in index.html three.min.js core.js apps.js apps2.js apps3.js apps4.js spiral.js handtrack.js; do
+          for f in index.html three.min.js core.js apps.js apps2.js apps3.js apps4.js apps5.js apps6.js peer.js spiral.js handtrack.js; do
             cp "$f" "$P/assets/$f"
           done
 
@@ -75,13 +75,13 @@ jobs:
           exit $code
 
       - name: Name the APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk SpatialOS.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk OrbitOS.apk
 
       - name: Upload APK (Actions artifact)
         uses: actions/upload-artifact@v4
         with:
-          name: SpatialOS-apk
-          path: SpatialOS.apk
+          name: OrbitOS-apk
+          path: OrbitOS.apk
 
       # Also attach the APK to a release so you get a direct .apk link (no zip) on your phone.
       - name: Publish APK to the "latest" release
@@ -89,7 +89,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-build
-          name: SpatialOS latest build
+          name: Orbit OS latest build
           body: Newest debug APK from the last push.
-          files: SpatialOS.apk
+          files: OrbitOS.apk
           make_latest: true
